@@ -24,8 +24,7 @@ data class MobileEvent(
     val type: String,
     val timestamp: String = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
         timeZone = TimeZone.getTimeZone("UTC")
-    }.format(Date()),
-    val screen: String? = null
+    }.format(Date())
 )
 
 data class AffiliateoState(
