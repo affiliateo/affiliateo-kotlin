@@ -81,12 +81,7 @@ object Affiliateo {
 
             override fun onActivityStopped(activity: Activity) {
                 activeCount--
-                if (activeCount == 0) {
-                    // App went to background
-                    scope?.launch {
-                        sendSessionEvent("session_end")
-                    }
-                }
+                // No session_end — server handles inactivity via 10-minute timeout
             }
 
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
