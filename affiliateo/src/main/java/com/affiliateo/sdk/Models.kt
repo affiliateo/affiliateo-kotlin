@@ -24,7 +24,11 @@ data class MobileEvent(
     val type: String,
     val timestamp: String = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
         timeZone = TimeZone.getTimeZone("UTC")
-    }.format(Date())
+    }.format(Date()),
+    /** Set on screen_view events (e.g. "Paywall"). */
+    val screen: String? = null,
+    /** Optional context dictionary (e.g. mapOf("plan" to "pro")). */
+    val metadata: Map<String, Any>? = null
 )
 
 data class AffiliateoState(

@@ -67,6 +67,8 @@ internal class AffiliateoClient(private val apiUrl: String = "https://affiliateo
                 put(JSONObject().apply {
                     put("type", event.type)
                     put("timestamp", event.timestamp)
+                    event.screen?.let { put("screen", it) }
+                    event.metadata?.let { put("metadata", JSONObject(it)) }
                 })
             }
         }

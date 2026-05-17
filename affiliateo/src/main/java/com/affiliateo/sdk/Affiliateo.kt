@@ -59,12 +59,21 @@ object Affiliateo {
         this.deviceId = DeviceId.get(context.applicationContext)
         this.scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
-        // Identify on startup
+        // Identify on startup + auto-fire one screen_view so session_time has
+        // >= 2 timestamps (otherwise max - min = 0).
         scope?.launch {
             identify(context.applicationContext)
+            sendEvent(MobileEvent(
+                type = "screen_view",
+                screen = "[Entry]",
+                metadata = mapOf("auto" to true)
+            ))
         }
 
-        // Listen for app foreground/background
+        // Listen for app foreground/background. We deliberately fire a
+        // screen_view on background (overriding the older "server uses 10-min
+        // timeout" design) so the server has a real "last activity" timestamp
+        // close to when the user actually left.
         val app = context.applicationContext as? Application ?: return
         app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
             private var activeCount = 0
@@ -81,7 +90,17 @@ object Affiliateo {
 
             override fun onActivityStopped(activity: Activity) {
                 activeCount--
-                // No session_end — server handles inactivity via 10-minute timeout
+                if (activeCount == 0) {
+                    // App moved to background — fire one final screen_view so
+                    // session_time has an accurate "last activity" stamp.
+                    scope?.launch {
+                        sendEvent(MobileEvent(
+                            type = "screen_view",
+                            screen = "[Background]",
+                            metadata = mapOf("reason" to "background")
+                        ))
+                    }
+                }
             }
 
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
@@ -90,6 +109,44 @@ object Affiliateo {
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
             override fun onActivityDestroyed(activity: Activity) {}
         })
+    }
+
+    /**
+     * Fire a screen_view event for a specific screen.
+     * Call from `onResume()` in Activities or `onResume()` in Fragments.
+     */
+    @JvmStatic
+    @JvmOverloads
+    fun page(screenName: String, metadata: Map<String, Any>? = null) {
+        scope?.launch {
+            sendEvent(MobileEvent(
+                type = "screen_view",
+                screen = screenName,
+                metadata = metadata
+            ))
+        }
+    }
+
+    /**
+     * Fire a custom event with arbitrary name + metadata.
+     */
+    @JvmStatic
+    @JvmOverloads
+    fun track(eventName: String, metadata: Map<String, Any>? = null) {
+        val merged = mutableMapOf<String, Any>("event" to eventName)
+        metadata?.let { merged.putAll(it) }
+        scope?.launch {
+            sendEvent(MobileEvent(type = "custom", metadata = merged))
+        }
+    }
+
+    private suspend fun sendEvent(event: MobileEvent) {
+        val client = client ?: return
+        val deviceId = deviceId ?: return
+        val campaignId = campaignId ?: return
+        try {
+            client.sendEvents(campaignId, deviceId, listOf(event))
+        } catch (_: Exception) { }
     }
 
     private suspend fun identify(context: Context) {
