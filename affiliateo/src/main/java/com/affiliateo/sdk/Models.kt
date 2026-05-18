@@ -31,7 +31,16 @@ data class AffiliateoState(
     val refCode: String?,
     val isMatched: Boolean,
     val isLoading: Boolean,
-    val visitorId: String?
+    val visitorId: String?,
+    /**
+     * Play Billing obfuscatedAccountId UUID. Pass this to BillingFlowParams
+     * via setObfuscatedAccountId() at purchase time so Google stamps it onto
+     * the resulting RTDN payloads, which our backend resolves to the affiliate.
+     *
+     * Null before identify completes or when the device isn't matched to any
+     * affiliate.
+     */
+    val obfuscatedAccountId: String? = null
 )
 
 class AffiliateoException(message: String) : Exception(message)
