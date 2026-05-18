@@ -85,4 +85,34 @@ internal class AffiliateoClient(private val apiUrl: String = "https://affiliateo
             throw AffiliateoException("Event send failed: ${conn.responseCode}")
         }
     }
+
+    /**
+     * Bind a Play Billing obfuscatedAccountId (UUID) to this visitor on the
+     * server. After this returns, Google RTDN payloads carrying this id in
+     * externalAccountIdentifiers.obfuscatedExternalAccountId resolve to the
+     * same affiliate the visitor is matched to.
+     */
+    suspend fun registerGoogleAccountId(
+        campaignId: String,
+        visitorId: String,
+        obfuscatedAccountId: String
+    ) = withContext(Dispatchers.IO) {
+        val url = URL("${apiUrl.trimEnd('/')}/api/v1/mobile/google-account-id")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.doOutput = true
+
+        val body = JSONObject().apply {
+            put("campaign_id", campaignId)
+            put("visitor_id", visitorId)
+            put("obfuscated_account_id", obfuscatedAccountId)
+        }
+
+        conn.outputStream.use { it.write(body.toString().toByteArray()) }
+
+        if (conn.responseCode != 200) {
+            throw AffiliateoException("Google account id register failed: ${conn.responseCode}")
+        }
+    }
 }

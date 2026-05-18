@@ -3,7 +3,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-version = "1.1.5"
+version = "1.2.0"
 
 android {
     namespace = "com.affiliateo.sdk"
