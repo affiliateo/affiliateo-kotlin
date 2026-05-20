@@ -140,6 +140,29 @@ object Affiliateo {
         }
     }
 
+    /**
+     * Link this anonymous device install to a merchant user_id so the
+     * funnel can stitch the same person across devices, reinstalls,
+     * and the anonymous to logged-in handoff. Call once after sign-in.
+     * Idempotent: safe to call on every app launch when a user is
+     * signed in. Optional email is bounded to 320 chars (RFC 5321 max).
+     */
+    @JvmStatic
+    @JvmOverloads
+    fun identify(userId: String, email: String? = null) {
+        val cleanId = userId.trim()
+        if (cleanId.isEmpty() || cleanId.length > 256) return
+        val cleanEmail = email?.trim()?.takeIf { it.length in 3..320 }
+        val client = client ?: return
+        val deviceId = deviceId ?: return
+        val campaignId = campaignId ?: return
+        scope?.launch {
+            try {
+                client.identifyUser(campaignId, deviceId, cleanId, cleanEmail)
+            } catch (_: Exception) { }
+        }
+    }
+
     private suspend fun sendEvent(event: MobileEvent) {
         val client = client ?: return
         val deviceId = deviceId ?: return

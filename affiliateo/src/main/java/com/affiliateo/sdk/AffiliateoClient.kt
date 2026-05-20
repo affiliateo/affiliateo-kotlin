@@ -87,6 +87,40 @@ internal class AffiliateoClient(private val apiUrl: String = "https://affiliateo
     }
 
     /**
+     * Link this anonymous device install to a merchant user_id. Required
+     * for cross-device funnel stitching: the same person on phone +
+     * tablet + reinstall all collapse to one funnel actor. Idempotent
+     * on the server side. Best-effort: a 4xx here means the visitor
+     * row hasn't been created yet (sign-in fired before first /identify)
+     * and the next session will retry.
+     */
+    suspend fun identifyUser(
+        campaignId: String,
+        deviceId: String,
+        userId: String,
+        email: String? = null
+    ) = withContext(Dispatchers.IO) {
+        val url = URL("${apiUrl.trimEnd('/')}/api/v1/mobile/identify-user")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.doOutput = true
+
+        val body = JSONObject().apply {
+            put("campaign_id", campaignId)
+            put("device_id", deviceId)
+            put("user_id", userId)
+            email?.let { put("user_email", it) }
+        }
+
+        conn.outputStream.use { it.write(body.toString().toByteArray()) }
+
+        if (conn.responseCode != 200) {
+            throw AffiliateoException("Identify user failed: ${conn.responseCode}")
+        }
+    }
+
+    /**
      * Bind a Play Billing obfuscatedAccountId (UUID) to this visitor on the
      * server. After this returns, Google RTDN payloads carrying this id in
      * externalAccountIdentifiers.obfuscatedExternalAccountId resolve to the
