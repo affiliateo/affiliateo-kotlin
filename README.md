@@ -18,7 +18,7 @@ In your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.github.NicoGrajales:affiliateo-kotlin:1.0.0")
+    implementation("com.github.affiliateo:affiliateo-kotlin:2.0.0")
 }
 ```
 
@@ -49,12 +49,40 @@ if (state.isMatched) {
 }
 ```
 
+## Track screens (manual)
+
+Screens are tracked when you call `Affiliateo.page(name)` per screen. This matches the Mixpanel / Amplitude / Datafast model. predictable, no ghost events polluting funnels.
+
+```kotlin
+@Composable
+fun HomeScreen() {
+    LaunchedEffect(Unit) {
+        Affiliateo.page("HomeScreen")
+    }
+    YourScreenUI()
+}
+```
+
+## Track custom events
+
+For buttons or other moments that matter (signup, trial start, etc.):
+
+```kotlin
+Button(onClick = {
+    Affiliateo.track("signup_completed")
+    onNext()
+}) {
+    Text("Continue")
+}
+```
+
 ## What it does
 
 - **Identifies the device** using Android's built-in ANDROID_ID (no permissions needed)
-- **Tracks sessions** automatically (app foreground / background)
+- **Tracks sessions** automatically (app foreground)
 - **Matches affiliate referrals** via fingerprint matching
 - **Sets RevenueCat attributes** automatically if RevenueCat is installed
+- **IAP attribution** via Play Billing `obfuscatedAccountId`
 
 ## Requirements
 
