@@ -59,21 +59,18 @@ object Affiliateo {
         this.deviceId = DeviceId.get(context.applicationContext)
         this.scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
-        // Identify on startup + auto-fire one screen_view so session_time has
-        // >= 2 timestamps (otherwise max - min = 0).
+        // Identify on startup. Screens are NOT auto-tracked. the host app
+        // calls Affiliateo.page(name) per screen, matching the Mixpanel /
+        // Amplitude / Datafast mobile model. predictable + debuggable +
+        // no ghost events.
         scope?.launch {
             identify(context.applicationContext)
-            sendEvent(MobileEvent(
-                type = "screen_view",
-                screen = "[Entry]",
-                metadata = mapOf("auto" to true)
-            ))
         }
 
-        // Listen for app foreground/background. We deliberately fire a
-        // screen_view on background (overriding the older "server uses 10-min
-        // timeout" design) so the server has a real "last activity" timestamp
-        // close to when the user actually left.
+        // Keep the server-side session alive on foreground. The server's
+        // start_mobile_session RPC handles rotation based on the 10-minute
+        // inactivity timeout. No background screen_view. that was a ghost
+        // event that polluted funnels.
         val app = context.applicationContext as? Application ?: return
         app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
             private var activeCount = 0
@@ -90,17 +87,6 @@ object Affiliateo {
 
             override fun onActivityStopped(activity: Activity) {
                 activeCount--
-                if (activeCount == 0) {
-                    // App moved to background — fire one final screen_view so
-                    // session_time has an accurate "last activity" stamp.
-                    scope?.launch {
-                        sendEvent(MobileEvent(
-                            type = "screen_view",
-                            screen = "[Background]",
-                            metadata = mapOf("reason" to "background")
-                        ))
-                    }
-                }
             }
 
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
