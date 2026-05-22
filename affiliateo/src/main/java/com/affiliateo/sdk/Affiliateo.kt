@@ -31,8 +31,20 @@ object Affiliateo {
     private var client: AffiliateoClient? = null
     private var deviceId: String? = null
     private var campaignId: String? = null
+    private var apiUrl: String = "https://affiliateo.com"
     private var scope: CoroutineScope? = null
     private var configured = false
+    private var queue: EventQueue? = null
+    private var appContext: Context? = null
+
+    // Persistent opt-out flag. Mirrors @affiliateo/react-native 4.0.0,
+    // @affiliateo/web 3.0.0, and affiliateo-swift parity. Stored in
+    // SharedPreferences so the flag survives app restarts. Hot-path
+    // checks happen via the volatile in-memory mirror so we don't pay
+    // a SharedPreferences read on every track() call.
+    private const val OPT_OUT_KEY = "affiliateo_opt_out"
+    private const val OPT_OUT_PREFS = "affiliateo"
+    @Volatile private var optedOut: Boolean = false
 
     var state: AffiliateoState = AffiliateoState(
         refCode = null,
@@ -54,10 +66,33 @@ object Affiliateo {
         if (configured) return
         configured = true
 
+        this.appContext = context.applicationContext
         this.campaignId = campaignId
+        this.apiUrl = if (apiUrl.endsWith("/")) apiUrl.dropLast(1) else apiUrl
         this.client = AffiliateoClient(apiUrl)
         this.deviceId = DeviceId.get(context.applicationContext)
         this.scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+        this.queue = EventQueue(context.applicationContext)
+
+        // Hydrate opt-out flag from disk BEFORE anything else touches
+        // the network. A previously opted-out user staying opted out is
+        // the whole point of persistence.
+        val prefs = context.applicationContext.getSharedPreferences(OPT_OUT_PREFS, Context.MODE_PRIVATE)
+        optedOut = prefs.getString(OPT_OUT_KEY, null) == "true"
+
+        if (optedOut) {
+            // Opted-out path: skip identify + foreground ping entirely.
+            // Set isLoading=false so any host UI gated on it unblocks.
+            // Public methods stay available and noop until optIn() flips
+            // the flag back.
+            state = AffiliateoState(
+                refCode = null,
+                isMatched = false,
+                isLoading = false,
+                visitorId = null,
+            )
+            return
+        }
 
         // Identify on startup. Screens are NOT auto-tracked. the host app
         // calls Affiliateo.page(name) per screen, matching the Mixpanel /
@@ -76,7 +111,7 @@ object Affiliateo {
             private var activeCount = 0
 
             override fun onActivityStarted(activity: Activity) {
-                if (activeCount == 0) {
+                if (activeCount == 0 && !optedOut) {
                     // App came to foreground
                     scope?.launch {
                         sendSessionEvent("session_start")
@@ -104,13 +139,13 @@ object Affiliateo {
     @JvmStatic
     @JvmOverloads
     fun page(screenName: String, metadata: Map<String, Any>? = null) {
-        scope?.launch {
-            sendEvent(MobileEvent(
-                type = "screen_view",
-                screen = screenName,
-                metadata = metadata
-            ))
-        }
+        if (optedOut) return
+        enqueueEvent(mapOf<String, Any?>(
+            "type" to "screen_view",
+            "timestamp" to nowIso(),
+            "screen" to screenName,
+            "metadata" to metadata,
+        ))
     }
 
     /**
@@ -119,11 +154,109 @@ object Affiliateo {
     @JvmStatic
     @JvmOverloads
     fun track(eventName: String, metadata: Map<String, Any>? = null) {
+        if (optedOut) return
         val merged = mutableMapOf<String, Any>("event" to eventName)
         metadata?.let { merged.putAll(it) }
+        enqueueEvent(mapOf<String, Any?>(
+            "type" to "custom",
+            "timestamp" to nowIso(),
+            "metadata" to merged,
+        ))
+    }
+
+    /**
+     * Wipe the device identity. Drains pending events first (they land
+     * server-side under the OLD device_id which is correct), then clears
+     * the queue, regenerates the device_id, and resets state. Call on
+     * app logout when a different user might sign in afterwards.
+     */
+    @JvmStatic
+    fun reset() {
+        val ctx = appContext ?: return
         scope?.launch {
-            sendEvent(MobileEvent(type = "custom", metadata = merged))
+            queue?.flush()
+            queue?.clear()
+            // Clear the device_id cache so DeviceId.get() mints a fresh one
+            // (the SharedPreferences UUID fallback). The platform androidId
+            // is tied to the install and we can't change it; only the
+            // UUID fallback gets fresh entropy.
+            ctx.getSharedPreferences("affiliateo", Context.MODE_PRIVATE)
+                .edit().remove("device_id").apply()
+            deviceId = DeviceId.get(ctx)
+            state = AffiliateoState(
+                refCode = null,
+                isMatched = false,
+                isLoading = false,
+                visitorId = null,
+            )
         }
+    }
+
+    /**
+     * Stop tracking on this device. Sets the persistent opt-out flag in
+     * SharedPreferences and silences ALL subsequent page / track /
+     * identify calls until optIn() is called. Survives app restart.
+     * Pending queued events are dropped. Use for GDPR/CCPA consent.
+     */
+    @JvmStatic
+    fun optOut() {
+        val ctx = appContext ?: return
+        optedOut = true
+        ctx.getSharedPreferences(OPT_OUT_PREFS, Context.MODE_PRIVATE)
+            .edit().putString(OPT_OUT_KEY, "true").apply()
+        queue?.clear()
+    }
+
+    /**
+     * Re-enable tracking after a previous optOut(). To resume the auto
+     * session_start that fires on app foreground, the host should restart
+     * the app or call configure() again on a fresh process.
+     */
+    @JvmStatic
+    fun optIn() {
+        val ctx = appContext ?: return
+        optedOut = false
+        ctx.getSharedPreferences(OPT_OUT_PREFS, Context.MODE_PRIVATE)
+            .edit().remove(OPT_OUT_KEY).apply()
+    }
+
+    /**
+     * Force-drain the event queue immediately. Useful before a known
+     * unrecoverable transition (entering an in-app purchase flow, app
+     * about to be backgrounded for a long time). Best-effort: if offline
+     * the flush noops and events stay queued for the next retry.
+     *
+     * Coroutine-suspending. Wrap in `runBlocking` from Java callers if
+     * needed (rare — most callers are already in a coroutine scope).
+     */
+    @JvmStatic
+    suspend fun flush() {
+        queue?.flush()
+    }
+
+    private fun enqueueEvent(event: Map<String, Any?>) {
+        val cid = campaignId ?: return
+        val did = deviceId ?: return
+        val q = queue ?: return
+        q.enqueue(
+            endpoint = "$apiUrl/api/v1/mobile/event",
+            payload = mapOf<String, Any?>(
+                "campaign_id" to cid,
+                "device_id" to did,
+                "events" to listOf(event),
+            )
+        )
+    }
+
+    private fun nowIso(): String {
+        // SimpleDateFormat is not thread-safe across instances but
+        // we're already serializing through a single coroutine scope
+        // for tracking calls. java.time.Instant would be cleaner but
+        // requires API 26+ desugaring; SimpleDateFormat works on all
+        // supported API levels.
+        val fmt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
+        fmt.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        return fmt.format(java.util.Date())
     }
 
     /**
@@ -138,6 +271,7 @@ object Affiliateo {
      */
     @JvmStatic
     fun identify(userId: String) {
+        if (optedOut) return
         val cleanId = userId.trim()
         if (cleanId.isEmpty() || cleanId.length > 128) return
         val client = client ?: return
@@ -148,15 +282,6 @@ object Affiliateo {
                 client.identifyUser(campaignId, deviceId, cleanId)
             } catch (_: Exception) { }
         }
-    }
-
-    private suspend fun sendEvent(event: MobileEvent) {
-        val client = client ?: return
-        val deviceId = deviceId ?: return
-        val campaignId = campaignId ?: return
-        try {
-            client.sendEvents(campaignId, deviceId, listOf(event))
-        } catch (_: Exception) { }
     }
 
     private suspend fun identify(context: Context) {
@@ -232,14 +357,15 @@ object Affiliateo {
     )
     private fun isUuidV4(s: String): Boolean = uuidRegex.matches(s)
 
-    private suspend fun sendSessionEvent(type: String) {
-        val client = client ?: return
-        val deviceId = deviceId ?: return
-        val campaignId = campaignId ?: return
-
-        try {
-            client.sendEvents(campaignId, deviceId, listOf(MobileEvent(type = type)))
-        } catch (_: Exception) { }
+    private fun sendSessionEvent(type: String) {
+        // Route through the queue so foreground pings survive a flaky
+        // network the way regular page/track events do. The server's
+        // start_mobile_session RPC is idempotent so a duplicate from a
+        // queue retry just no-ops.
+        enqueueEvent(mapOf<String, Any?>(
+            "type" to type,
+            "timestamp" to nowIso(),
+        ))
     }
 
     private fun setRevenueCatAttribute(refCode: String) {
