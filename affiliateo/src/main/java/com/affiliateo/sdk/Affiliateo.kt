@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.Application
 import android.content.Context
 import android.os.Bundle
+import android.util.Log
 import kotlinx.coroutines.*
 
 /**
@@ -46,6 +47,15 @@ object Affiliateo {
     private const val OPT_OUT_PREFS = "affiliateo"
     @Volatile private var optedOut: Boolean = false
 
+    // Debug flag. When true, every SDK decision (init, page, track,
+    // identify, flush, opt in/out, reset) is printed to Logcat via
+    // Log.d("Affiliateo", ...). Only useful during development.
+    // ship with debug=false (the default) so production apps don't
+    // emit verbose log lines AND don't leak SDK internals to anyone
+    // running `adb logcat`. Mirrors @affiliateo/web and affiliateo-swift.
+    private const val LOG_TAG = "Affiliateo"
+    @Volatile private var debug: Boolean = false
+
     var state: AffiliateoState = AffiliateoState(
         refCode = null,
         isMatched = false,
@@ -61,7 +71,8 @@ object Affiliateo {
     fun configure(
         context: Context,
         campaignId: String,
-        apiUrl: String = "https://affiliateo.com"
+        apiUrl: String = "https://affiliateo.com",
+        debug: Boolean = false
     ) {
         if (configured) return
         configured = true
@@ -73,6 +84,11 @@ object Affiliateo {
         this.deviceId = DeviceId.get(context.applicationContext)
         this.scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
         this.queue = EventQueue(context.applicationContext)
+        // Pick up the debug flag BEFORE any other side effect so the next
+        // log() call (in the opted-out branch or the identify launch
+        // below) actually fires when the merchant turned it on.
+        this.debug = debug
+        log("init", "campaign=$campaignId, device=${this.deviceId}")
 
         // Hydrate opt-out flag from disk BEFORE anything else touches
         // the network. A previously opted-out user staying opted out is
@@ -81,6 +97,7 @@ object Affiliateo {
         optedOut = prefs.getString(OPT_OUT_KEY, null) == "true"
 
         if (optedOut) {
+            log("blocked: opted out (call optIn() to re-enable)")
             // Opted-out path: skip identify + foreground ping entirely.
             // Set isLoading=false so any host UI gated on it unblocks.
             // Public methods stay available and noop until optIn() flips
@@ -140,6 +157,7 @@ object Affiliateo {
     @JvmOverloads
     fun page(screenName: String, metadata: Map<String, Any>? = null) {
         if (optedOut) return
+        log("page", "screen=$screenName, metadata=$metadata")
         enqueueEvent(mapOf<String, Any?>(
             "type" to "screen_view",
             "timestamp" to nowIso(),
@@ -155,6 +173,7 @@ object Affiliateo {
     @JvmOverloads
     fun track(eventName: String, metadata: Map<String, Any>? = null) {
         if (optedOut) return
+        log("track", "event=$eventName, metadata=$metadata")
         val merged = mutableMapOf<String, Any>("event" to eventName)
         metadata?.let { merged.putAll(it) }
         enqueueEvent(mapOf<String, Any?>(
@@ -173,6 +192,7 @@ object Affiliateo {
     @JvmStatic
     fun reset() {
         val ctx = appContext ?: return
+        log("reset")
         scope?.launch {
             queue?.flush()
             queue?.clear()
@@ -201,6 +221,7 @@ object Affiliateo {
     @JvmStatic
     fun optOut() {
         val ctx = appContext ?: return
+        log("optOut")
         optedOut = true
         ctx.getSharedPreferences(OPT_OUT_PREFS, Context.MODE_PRIVATE)
             .edit().putString(OPT_OUT_KEY, "true").apply()
@@ -215,6 +236,7 @@ object Affiliateo {
     @JvmStatic
     fun optIn() {
         val ctx = appContext ?: return
+        log("optIn")
         optedOut = false
         ctx.getSharedPreferences(OPT_OUT_PREFS, Context.MODE_PRIVATE)
             .edit().remove(OPT_OUT_KEY).apply()
@@ -231,7 +253,23 @@ object Affiliateo {
      */
     @JvmStatic
     suspend fun flush() {
+        log("flush requested")
         queue?.flush()
+    }
+
+    /**
+     * Internal debug logger. No-op unless debug=true was passed to configure().
+     * Goes through android.util.Log.d so the standard Logcat filter
+     * (`adb logcat -s Affiliateo`) picks it up cleanly. Single-arg form for
+     * messages without payload; two-arg form for messages with data.
+     */
+    private fun log(msg: String, data: String? = null) {
+        if (!debug) return
+        if (data != null) {
+            Log.d(LOG_TAG, "$msg | $data")
+        } else {
+            Log.d(LOG_TAG, msg)
+        }
     }
 
     private fun enqueueEvent(event: Map<String, Any?>) {
@@ -277,6 +315,7 @@ object Affiliateo {
         val client = client ?: return
         val deviceId = deviceId ?: return
         val campaignId = campaignId ?: return
+        log("identify (user)", "user_id=$cleanId")
         scope?.launch {
             try {
                 client.identifyUser(campaignId, deviceId, cleanId)
@@ -322,12 +361,14 @@ object Affiliateo {
                 visitorId = result.visitorId,
                 obfuscatedAccountId = obfuscatedAccountId
             )
+            log("identify success", "visitor=${result.visitorId}, matched=${result.matched}, ref=${result.refCode}")
 
             // Auto-set RevenueCat attribute if matched
             if (result.refCode != null) {
                 setRevenueCatAttribute(result.refCode)
             }
         } catch (_: Exception) {
+            log("identify failed (network error)")
             state = state.copy(isLoading = false)
         }
     }
