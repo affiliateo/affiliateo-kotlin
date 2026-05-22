@@ -72,7 +72,9 @@ object Affiliateo {
         context: Context,
         campaignId: String,
         apiUrl: String = "https://affiliateo.com",
-        debug: Boolean = false
+        debug: Boolean = false,
+        flushIntervalMs: Long = 5_000L,
+        maxQueueSize: Int = 100
     ) {
         if (configured) return
         configured = true
@@ -83,7 +85,13 @@ object Affiliateo {
         this.client = AffiliateoClient(apiUrl)
         this.deviceId = DeviceId.get(context.applicationContext)
         this.scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-        this.queue = EventQueue(context.applicationContext)
+        // Queue tuning — both clamped inside EventQueue.init so out-of-range
+        // values don't break the queue (min 1s flush / max 60s, size [10, 1000]).
+        this.queue = EventQueue(
+            context.applicationContext,
+            flushIntervalMs = flushIntervalMs,
+            maxQueueSize = maxQueueSize,
+        )
         // Pick up the debug flag BEFORE any other side effect so the next
         // log() call (in the opted-out branch or the identify launch
         // below) actually fires when the merchant turned it on.

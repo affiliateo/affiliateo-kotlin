@@ -46,7 +46,11 @@ import kotlin.concurrent.withLock
  *   - flushIntervalMs = 5_000 periodic auto-flush cadence
  *   - sizeFlushThreshold = 10 trigger flush when queue grows past
  */
-internal class EventQueue(private val context: Context) {
+internal class EventQueue(
+    private val context: Context,
+    flushIntervalMs: Long = DEFAULT_FLUSH_INTERVAL_MS,
+    maxQueueSize: Int = DEFAULT_MAX_QUEUE_SIZE,
+) {
 
     private data class QueuedEvent(
         val id: String,
@@ -59,10 +63,16 @@ internal class EventQueue(private val context: Context) {
         private const val STORAGE_KEY = "affiliateo_event_queue"
         private const val PREFS_NAME = "affiliateo_queue"
         private const val MAX_RETRIES = 3
-        private const val MAX_QUEUE_SIZE = 100
-        private const val FLUSH_INTERVAL_MS = 5_000L
+        private const val DEFAULT_MAX_QUEUE_SIZE = 100
+        private const val DEFAULT_FLUSH_INTERVAL_MS = 5_000L
         private const val SIZE_FLUSH_THRESHOLD = 10
     }
+
+    // Configurable knobs, clamped to sane bounds at init so a misconfigured
+    // host can't break the queue. min 1s flush so we don't hammer the
+    // network; max 60s so the queue actually drains. Size cap [10, 1000].
+    private val flushIntervalMs: Long = flushIntervalMs.coerceIn(1_000L, 60_000L)
+    private val maxQueueSize: Int = maxQueueSize.coerceIn(10, 1000)
 
     private val prefs: SharedPreferences = context.applicationContext
         .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -111,8 +121,8 @@ internal class EventQueue(private val context: Context) {
             // started slowing down on the JSON encode/decode round-trip.
             // 100 events is a sane upper bound that protects without
             // dropping anything during normal use.
-            if (queue.size > MAX_QUEUE_SIZE) {
-                val excess = queue.size - MAX_QUEUE_SIZE
+            if (queue.size > maxQueueSize) {
+                val excess = queue.size - maxQueueSize
                 queue.subList(0, excess).clear()
             }
             persist()
@@ -220,7 +230,7 @@ internal class EventQueue(private val context: Context) {
     private fun startFlushTimer() {
         flushJob = scope.launch {
             while (isActive && !shuttingDown) {
-                delay(FLUSH_INTERVAL_MS)
+                delay(flushIntervalMs)
                 try { flush() } catch (_: Exception) { /* swallow */ }
             }
         }
