@@ -338,7 +338,11 @@ object Affiliateo {
 
         try {
             val deviceInfo = DeviceInfoCollector.collect(context)
-            val result = client.identify(campaignId, deviceId, deviceInfo)
+            // Play Install Referrer: read once per install (cached after) so a
+            // paid-ad install gets its source labelled server-side. Best-effort;
+            // never blocks identify for more than the Play Store handshake.
+            val installReferrer = try { InstallReferrer.get(context) } catch (_: Exception) { null }
+            val result = client.identify(campaignId, deviceId, deviceInfo, installReferrer)
 
             // Mint and register the Play Billing obfuscatedAccountId for
             // native Google Play attribution. Persisted per (campaignId, refCode)

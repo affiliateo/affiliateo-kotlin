@@ -3,12 +3,12 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// 3.1.0: Play Install Referrer capture — the SDK reads Google's install
+// referrer once on first launch and sends it with /identify, so a paid-ad
+// install (Meta / TikTok / Google Ads) gets its source labelled server-side
+// with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-// Matches the @affiliateo/react-native 4.0.0 + @affiliateo/web 3.0.0 +
-// affiliateo-swift parity work shipped at the same time. No API breaks
-// for existing 2.x callers — page/track/identify keep the same signature,
-// the new methods are additive.
-version = "3.0.0"
+version = "3.1.0"
 
 android {
     namespace = "com.affiliateo.sdk"
@@ -43,6 +43,9 @@ android {
 
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    // Google's Play Install Referrer — how the Play Store hands the app the
+    // link (and its utm/click-id tags) that installed it. Tiny (~20KB).
+    implementation("com.android.installreferrer:installreferrer:2.2")
     // Compose runtime is compileOnly: ComposeHelpers.kt compiles cleanly
     // here, but consumers without Compose in their app aren't forced to
     // pull in the (large) Compose runtime they don't use. Consumers WITH
