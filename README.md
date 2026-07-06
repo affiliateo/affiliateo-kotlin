@@ -18,7 +18,7 @@ In your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.github.affiliateo:affiliateo-kotlin:3.0.0")
+    implementation("com.github.affiliateo:affiliateo-kotlin:4.3.0")
 }
 ```
 
