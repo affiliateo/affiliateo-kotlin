@@ -3,7 +3,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-// 4.3.0: version alignment — every Affiliateo SDK (web, React Native,
+// 4.4.0: version alignment — every Affiliateo SDK (web, React Native,
 // Swift, Kotlin, Flutter) now ships the same version number. Identical
 // source to 3.1.0.
 // 3.1.0: Play Install Referrer capture — the SDK reads Google's install
@@ -11,7 +11,7 @@ plugins {
 // install (Meta / TikTok / Google Ads) gets its source labelled server-side
 // with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-version = "4.3.0"
+version = "4.4.0"
 
 android {
     namespace = "com.affiliateo.sdk"
