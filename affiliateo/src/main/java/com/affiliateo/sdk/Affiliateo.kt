@@ -375,10 +375,12 @@ object Affiliateo {
             )
             log("identify success", "visitor=${result.visitorId}, matched=${result.matched}, ref=${result.refCode}")
 
-            // Auto-set RevenueCat attribute if matched
-            if (result.refCode != null) {
-                setRevenueCatAttribute(result.refCode)
-            }
+            // Auto-set RevenueCat subscriber attributes. The visitor id goes
+            // on EVERY identify (matched or organic): the webhook stamps it
+            // onto the conversion row, powering the per-buyer Spent column,
+            // funnels journeys, and ad ROAS/LTV joins. The ref code rides
+            // along only when the install matched an affiliate.
+            setRevenueCatAttributes(result.visitorId, result.refCode)
         } catch (_: Exception) {
             log("identify failed (network error)")
             state = state.copy(isLoading = false)
@@ -421,13 +423,20 @@ object Affiliateo {
         ))
     }
 
-    private fun setRevenueCatAttribute(refCode: String) {
-        // Try to set RevenueCat attribute via reflection (no hard dependency)
+    private fun setRevenueCatAttributes(visitorId: String, refCode: String?) {
+        // Try to set RevenueCat attributes via reflection (no hard dependency).
+        // affiliateo_visitor_id links RevenueCat webhook events back to this
+        // device's tracked visitor; without it every conversion lands with
+        // visitor_id NULL and per-buyer analytics stay dark.
         try {
             val purchasesClass = Class.forName("com.revenuecat.purchases.Purchases")
             val sharedInstance = purchasesClass.getMethod("getSharedInstance").invoke(null)
             val setAttributes = sharedInstance.javaClass.getMethod("setAttributes", Map::class.java)
-            setAttributes.invoke(sharedInstance, mapOf("affiliateo_ref" to refCode))
+            val attributes = buildMap {
+                put("affiliateo_visitor_id", visitorId)
+                if (refCode != null) put("affiliateo_ref", refCode)
+            }
+            setAttributes.invoke(sharedInstance, attributes)
         } catch (_: Exception) { }
     }
 }
