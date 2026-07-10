@@ -3,6 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// 4.5.0: campaigns are now apps — configure(appId = ...) is the documented
+//   spelling; campaignId = ... still works (deprecated alias).
 // 4.4.1: RevenueCat attributes now include affiliateo_visitor_id on every
 //        identify (not just affiliate-matched), so purchases link back to the
 //        tracked visitor (per-buyer spend, funnels, ad ROAS).
@@ -14,7 +16,7 @@ plugins {
 // install (Meta / TikTok / Google Ads) gets its source labelled server-side
 // with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-version = "4.4.1"
+version = "4.5.0"
 
 android {
     namespace = "com.affiliateo.sdk"

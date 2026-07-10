@@ -15,7 +15,7 @@ import kotlinx.coroutines.*
  * ```kotlin
  * Affiliateo.configure(
  *     context = this,
- *     campaignId = "YOUR_CAMPAIGN_ID"
+ *     appId = "YOUR_APP_ID"
  * )
  * ```
  *
@@ -67,20 +67,30 @@ object Affiliateo {
     /**
      * Configure and start the Affiliateo SDK.
      * Call this once in your Application.onCreate() or main Activity.
+     *
+     * Pass your app ID via [appId]. The [campaignId] parameter is the
+     * pre-4.5.0 name for the same value (Affiliateo campaigns are now
+     * called apps) and keeps working; [appId] wins when both are set.
      */
     fun configure(
         context: Context,
-        campaignId: String,
+        appId: String? = null,
         apiUrl: String = "https://affiliateo.com",
         debug: Boolean = false,
         flushIntervalMs: Long = 5_000L,
-        maxQueueSize: Int = 100
+        maxQueueSize: Int = 100,
+        campaignId: String? = null
     ) {
+        val resolvedAppId = appId ?: campaignId
+        if (resolvedAppId == null) {
+            Log.e(LOG_TAG, "Missing appId — pass your app ID to Affiliateo.configure().")
+            return
+        }
         if (configured) return
         configured = true
 
         this.appContext = context.applicationContext
-        this.campaignId = campaignId
+        this.campaignId = resolvedAppId
         this.apiUrl = if (apiUrl.endsWith("/")) apiUrl.dropLast(1) else apiUrl
         this.client = AffiliateoClient(apiUrl)
         this.deviceId = DeviceId.get(context.applicationContext)
@@ -96,7 +106,7 @@ object Affiliateo {
         // log() call (in the opted-out branch or the identify launch
         // below) actually fires when the merchant turned it on.
         this.debug = debug
-        log("init", "campaign=$campaignId, device=${this.deviceId}")
+        log("init", "app=$resolvedAppId, device=${this.deviceId}")
 
         // Hydrate opt-out flag from disk BEFORE anything else touches
         // the network. A previously opted-out user staying opted out is
@@ -121,7 +131,7 @@ object Affiliateo {
 
         // Identify on startup. Screens are NOT auto-tracked. the host app
         // calls Affiliateo.page(name) per screen, matching the Mixpanel /
-        // Amplitude / Datafast mobile model. predictable + debuggable +
+        // Amplitude mobile model. predictable + debuggable +
         // no ghost events.
         scope?.launch {
             identify(context.applicationContext)

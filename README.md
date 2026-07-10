@@ -18,7 +18,7 @@ In your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.github.affiliateo:affiliateo-kotlin:4.4.1")
+    implementation("com.github.affiliateo:affiliateo-kotlin:4.5.0")
 }
 ```
 
@@ -34,7 +34,7 @@ class MyApp : Application() {
         super.onCreate()
         Affiliateo.configure(
             context = this,
-            campaignId = "YOUR_CAMPAIGN_ID"
+            appId = "YOUR_APP_ID"
         )
     }
 }
@@ -51,7 +51,7 @@ if (state.isMatched) {
 
 ## Track screens (manual)
 
-Screens are tracked when you call `Affiliateo.page(name)` per screen. This matches the Mixpanel / Amplitude / Datafast model. predictable, no ghost events polluting funnels.
+Screens are tracked when you call `Affiliateo.page(name)` per screen. This matches the Mixpanel / Amplitude model. predictable, no ghost events polluting funnels.
 
 ```kotlin
 @Composable
