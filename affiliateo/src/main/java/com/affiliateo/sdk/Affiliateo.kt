@@ -341,6 +341,36 @@ object Affiliateo {
         }
     }
 
+    /**
+     * Report the host app's RevenueCat App User ID
+     * (`Purchases.sharedInstance.appUserID`). Call once after RevenueCat has
+     * configured; safe to call on every launch.
+     *
+     * Lets an app owner grant this affiliate complimentary access to the app
+     * from their Affiliateo dashboard. Separate from [identify] on purpose:
+     * sign-in and RevenueCat configuration happen at different moments, and an
+     * app may do one without the other.
+     *
+     * No email or other PII is sent, same as [identify].
+     */
+    @JvmStatic
+    fun setRevenueCatUser(appUserId: String) {
+        if (optedOut) return
+        val rcId = appUserId.trim()
+        // 255 matches the server. RevenueCat's anonymous form
+        // ($RCAnonymousID:<32 hex>) is already ~50 characters.
+        if (rcId.isEmpty() || rcId.length > 255) return
+        val client = client ?: return
+        val deviceId = deviceId ?: return
+        val campaignId = campaignId ?: return
+        log("setRevenueCatUser", "revenuecat_user_id=$rcId")
+        scope?.launch {
+            try {
+                client.identifyRevenueCatUser(campaignId, deviceId, rcId)
+            } catch (_: Exception) { }
+        }
+    }
+
     private suspend fun identify(context: Context) {
         val client = client ?: return
         val deviceId = deviceId ?: return

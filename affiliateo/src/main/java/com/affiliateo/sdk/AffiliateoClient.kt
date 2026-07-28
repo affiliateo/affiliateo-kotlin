@@ -124,6 +124,50 @@ internal class AffiliateoClient(private val apiUrl: String = "https://affiliateo
     }
 
     /**
+     * Report the host app's RevenueCat App User ID
+     * (`Purchases.sharedInstance.appUserID`).
+     *
+     * Lets an app owner grant this affiliate complimentary access to the app
+     * from their Affiliateo dashboard. Without it, Affiliateo can only match
+     * an affiliate to a RevenueCat customer by email, which requires the host
+     * app to be setting RevenueCat's `$email` attribute AND the affiliate to
+     * have used the same address they used on Affiliateo.
+     *
+     * Deliberately separate from [identifyUser]: sign-in and RevenueCat
+     * configuration happen at different moments, and an app may do one
+     * without the other. The server accepts either field alone and writes only
+     * what the request carried, so neither wipes the other.
+     *
+     * Write-once per device server-side. Re-sending the same id every launch
+     * is a no-op; a DIFFERENT id for an already-bound device is rejected, so a
+     * tampered client cannot repoint an established device at somebody else's
+     * RevenueCat customer.
+     */
+    suspend fun identifyRevenueCatUser(
+        campaignId: String,
+        deviceId: String,
+        revenueCatUserId: String
+    ) = withContext(Dispatchers.IO) {
+        val url = URL("${apiUrl.trimEnd('/')}/api/v1/mobile/identify-user")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.doOutput = true
+
+        val body = JSONObject().apply {
+            put("campaign_id", campaignId)
+            put("device_id", deviceId)
+            put("revenuecat_user_id", revenueCatUserId)
+        }
+
+        conn.outputStream.use { it.write(body.toString().toByteArray()) }
+
+        if (conn.responseCode != 200) {
+            throw AffiliateoException("Identify RevenueCat user failed: ${conn.responseCode}")
+        }
+    }
+
+    /**
      * Bind a Play Billing obfuscatedAccountId (UUID) to this visitor on the
      * server. After this returns, Google RTDN payloads carrying this id in
      * externalAccountIdentifiers.obfuscatedExternalAccountId resolve to the
