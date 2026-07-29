@@ -1,0 +1,40 @@
+name: Build
+
+# Compile the library on every push and pull request.
+#
+# Until now nothing ever checked that what landed here actually builds. The SDK
+# is authored on a Windows machine with no Kotlin or Android toolchain, so a
+# typo could be tagged and consumed through JitPack, and the first person to
+# find out would be a merchant whose app suddenly won't compile.
+#
+# Note there is no Gradle wrapper committed to this repo, so this installs
+# Gradle rather than running ./gradlew. The Android SDK itself is preinstalled
+# on GitHub's ubuntu runners, which is why nothing here sets ANDROID_HOME.
+
+on:
+  push:
+    branches: [main]
+    tags: ['*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Gradle assemble
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble
+        # assemble, not build: `build` also runs lint and unit tests, and this
+        # library ships neither. The question being answered here is only
+        # "does it compile", so anything beyond that is noise that would fail
+        # for reasons unrelated to the code that just changed.
+        run: gradle assemble --no-daemon --stacktrace
