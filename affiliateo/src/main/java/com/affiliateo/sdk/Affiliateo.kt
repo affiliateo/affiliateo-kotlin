@@ -151,6 +151,12 @@ object Affiliateo {
                     scope?.launch {
                         sendSessionEvent("session_start")
                     }
+                    // Re-read the RevenueCat id. The one seen at identify is
+                    // usually the anonymous placeholder — RevenueCat only swaps
+                    // it for the real id when the app calls logIn, and sign-in
+                    // almost always happens after we started. Unchanged ids are
+                    // a no-op server-side, so the repeat is free.
+                    reportRevenueCatAppUserId()
                 }
                 activeCount++
             }
@@ -421,6 +427,14 @@ object Affiliateo {
             // funnels journeys, and ad ROAS/LTV joins. The ref code rides
             // along only when the install matched an affiliate.
             setRevenueCatAttributes(result.visitorId, result.refCode)
+
+            // …and read back WHICH RevenueCat customer this device is, the only
+            // thing that lets an app owner grant this affiliate free access
+            // from their Affiliateo dashboard. Read rather than waiting to be
+            // told: this shipped as a setRevenueCatUser() call the merchant had
+            // to add themselves, and an install step that gets skipped leaves
+            // the feature silently dead with nothing to say why.
+            reportRevenueCatAppUserId()
         } catch (_: Exception) {
             log("identify failed (network error)")
             state = state.copy(isLoading = false)
@@ -478,5 +492,49 @@ object Affiliateo {
             }
             setAttributes.invoke(sharedInstance, attributes)
         } catch (_: Exception) { }
+    }
+
+    /**
+     * The host app's RevenueCat App User ID, read straight from RevenueCat via
+     * the same reflection the attributes call above uses — no hard dependency,
+     * and null for the majority of apps that don't ship RevenueCat at all.
+     *
+     * `getSharedInstance` throws when the host app hasn't configured RevenueCat
+     * yet, which the catch turns into null. That is the right answer rather
+     * than an error: the next foreground tries again.
+     */
+    private fun readRevenueCatAppUserId(): String? {
+        return try {
+            val purchasesClass = Class.forName("com.revenuecat.purchases.Purchases")
+            val sharedInstance = purchasesClass.getMethod("getSharedInstance").invoke(null) ?: return null
+            val raw = sharedInstance.javaClass.getMethod("getAppUserID").invoke(sharedInstance) as? String
+                ?: return null
+            val trimmed = raw.trim()
+            // 255 matches the server cap. RevenueCat's anonymous form
+            // ($RCAnonymousID:<32 hex>) is already ~50 characters.
+            if (trimmed.isEmpty() || trimmed.length > 255) null else trimmed
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Send it, when there is one. Safe to call as often as we like: an
+     * unchanged id is a no-op server-side, so every call site can fire and
+     * forget.
+     *
+     * Called on identify AND on every foreground, because the id we see first
+     * is usually not the final one — RevenueCat hands out an anonymous
+     * placeholder until the app calls logIn, and sign-in almost always happens
+     * after we started. The server permits exactly one upgrade from that
+     * placeholder to a real id.
+     */
+    private fun reportRevenueCatAppUserId() {
+        val rcId = readRevenueCatAppUserId() ?: return
+        // Straight through the public method: it already carries the opt-out
+        // check, the null guards on client/deviceId/campaignId, and the
+        // logging. Duplicating those here would be a second copy to keep in
+        // step for no gain.
+        setRevenueCatUser(rcId)
     }
 }

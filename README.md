@@ -84,28 +84,35 @@ Button(onClick = {
 - **Sets RevenueCat attributes** automatically if RevenueCat is installed
 - **IAP attribution** via Play Billing `obfuscatedAccountId`
 
-## Giving affiliates free access (optional)
+## Giving affiliates free access
 
 App owners can switch complimentary access on for an individual affiliate from
 their Affiliateo dashboard, which grants a promotional entitlement in their own
-RevenueCat project. To make that possible, tell Affiliateo which RevenueCat
-customer this device is:
+RevenueCat project.
+
+**Nothing to add to your code.** As of 4.7.0 the SDK reads your RevenueCat App
+User ID itself, after its first identify and on every foreground after that. It
+finds RevenueCat by reflection, so there is no dependency to add and nothing at
+all happens in apps that don't use RevenueCat.
+
+Before 4.7.0 this needed a call you had to write yourself. It still exists if
+you want to control the timing:
 
 ```kotlin
 import com.revenuecat.purchases.Purchases
 
-// after Purchases.configure(...)
+// after Purchases.configure(...) — optional, the SDK already does this
 Affiliateo.setRevenueCatUser(Purchases.sharedInstance.appUserID)
 ```
 
-Call it once, after RevenueCat has configured. Calling it on every launch is
-fine and is a no-op after the first time.
+Sending the same id repeatedly is a no-op. RevenueCat issues an anonymous
+placeholder until your app calls `Purchases.logIn()`; the SDK re-reads on
+foreground and the server accepts exactly one upgrade from that placeholder to
+the real id.
 
-Without this, Affiliateo can only match an affiliate to a RevenueCat customer
-by email, which requires your app to be setting RevenueCat's `$email` attribute
-*and* the affiliate to have used the same address they used on Affiliateo. When
-that misses, the owner sees a disabled switch reading "hasn't opened your app
-yet".
+An affiliate still has to have opened your app through their own referral link
+at least once, because that link is what tells us which device is theirs. Until
+then the owner sees a disabled switch reading "hasn't opened your app yet".
 
 Notes:
 
