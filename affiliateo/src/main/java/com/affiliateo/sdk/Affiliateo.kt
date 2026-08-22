@@ -300,12 +300,29 @@ object Affiliateo {
         val cid = campaignId ?: return
         val did = deviceId ?: return
         val q = queue ?: return
+        // Dedup key, stamped once HERE so it is fixed for the life of the
+        // queued payload. Every retry then sends the identical id and the
+        // server, which holds a unique index on it, keeps exactly one row.
+        //
+        // This is the choke point every event type flows through (page,
+        // track, session pings), so stamping here rather than at each call
+        // site means a new event type cannot forget it. It has to be at
+        // enqueue and not at send: the queue persists across app launches,
+        // and an id minted at send time would differ on every attempt, which
+        // is precisely the duplicate we are trying to stop.
+        //
+        // Without it, a request the server received and wrote but whose
+        // response was lost on a flaky connection comes back on the next
+        // flush and counts twice. For a `custom` event that is a duplicated
+        // funnel conversion.
+        val identified = if (event.containsKey("event_id")) event else
+            event + ("event_id" to java.util.UUID.randomUUID().toString())
         q.enqueue(
             endpoint = "$apiUrl/api/v1/mobile/event",
             payload = mapOf<String, Any?>(
                 "campaign_id" to cid,
                 "device_id" to did,
-                "events" to listOf(event),
+                "events" to listOf(identified),
             )
         )
     }
