@@ -1,0 +1,32 @@
+# JitPack build configuration.
+#
+# Without this file JitPack ran its own bundled Gradle against JDK 17 and died
+# instantly with:
+#
+#   Could not create service of type ScriptPluginFactory using
+#   BuildScopeServices.createScriptPluginFactory()
+#     > Could not create service of type PluginResolutionStrategyInternal
+#   BUILD FAILED in 0s
+#
+# That pair is the signature of a Gradle too old to run on the JDK it was
+# handed. Nothing in the SDK source was involved — the build died before
+# reading a single line of it.
+#
+# GitHub Actions does not have this problem because .github/workflows/build.yml
+# pins gradle-version explicitly. JitPack never reads that file, and there is
+# no Gradle wrapper committed here for it to fall back on, so it needs its own
+# instruction.
+#
+# Gradle 8.5 is the same version CI pins, chosen to match AGP 8.2.2 (declared
+# in the root build.gradle.kts). Keep all three in step: AGP 8.2 requires
+# Gradle 8.2+ and does not run on Gradle 9.
+
+jdk:
+  - openjdk17
+
+before_install:
+  # `sdk default` rather than `sdk use`: use is scoped to the shell that runs
+  # it, and JitPack executes the install step in a separate shell, so a `use`
+  # here would silently not apply to the build that follows.
+  - sdk install gradle 8.5
+  - sdk default gradle 8.5
