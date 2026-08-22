@@ -146,7 +146,17 @@ internal class EventQueue(
 
             for (event in snapshot) {
                 val ok = sendOnce(event)
-                lock.withLock {
+                // <Unit> is load-bearing, not decoration. withLock is
+                // `fun <T> Lock.withLock(action: () -> T): T`, so T is inferred
+                // from the lambda's last expression. Left to infer, the
+                // if/else below becomes an EXPRESSION (its branches being
+                // Boolean from removeAll and Unit from the else), which in turn
+                // forces the two nested ifs to be expressions too — and an
+                // `if` used as an expression must have an else. That is the
+                // "'if' must have both main and 'else' branches if used as an
+                // expression" error this file failed on. Pinning T to Unit
+                // makes the body a statement block again.
+                lock.withLock<Unit> {
                     if (ok) {
                         queue.removeAll { it.id == event.id }
                     } else {
