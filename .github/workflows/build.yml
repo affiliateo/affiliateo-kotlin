@@ -31,6 +31,13 @@ jobs:
           java-version: '17'
 
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          # Pinned rather than inheriting whatever Gradle the runner image
+          # happens to ship. AGP 8.2.2 (see the root build.gradle.kts)
+          # supports Gradle 8.2 through 8.x and does not run on Gradle 9, so
+          # an image upgrade would otherwise turn this red on a day nobody
+          # touched the SDK.
+          gradle-version: '8.5'
 
       - name: Assemble
         # assemble, not build: `build` also runs lint and unit tests, and this
