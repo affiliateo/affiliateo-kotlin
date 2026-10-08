@@ -18,7 +18,7 @@ In your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.github.affiliateo:affiliateo-kotlin:4.8.1")
+    implementation("com.github.affiliateo:affiliateo-kotlin:4.8.2")
 }
 ```
 
@@ -94,6 +94,13 @@ RevenueCat project.
 User ID itself, after its first identify and on every foreground after that. It
 finds RevenueCat by reflection, so there is no dependency to add and nothing at
 all happens in apps that don't use RevenueCat.
+
+As of 4.8.2 that also holds in a shrunk release build. Android's shrinker (R8)
+is allowed to rename RevenueCat's classes, and the SDK's lookup by name then
+found nothing and said nothing: release builds stopped linking purchases to
+affiliates, while debug builds (not shrunk) kept working. The SDK now ships the
+rule that keeps those names, so there is still nothing to add. If you are on
+4.8.1 or older and shrink your release build, update to 4.8.2.
 
 Before 4.7.0 this needed a call you had to write yourself. It still exists if
 you want to control the timing:

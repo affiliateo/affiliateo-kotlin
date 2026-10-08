@@ -10,6 +10,9 @@ plugins {
     id("maven-publish")
 }
 
+// 4.8.2: ships a shrinker rule (consumer-rules.pro) that keeps the RevenueCat
+//        names the SDK looks up at run time. Without it a shrunk (R8) release
+//        build renamed them and RevenueCat tagging silently did nothing.
 // 4.5.0: campaigns are now apps — configure(appId = ...) is the documented
 //   spelling; campaignId = ... still works (deprecated alias).
 // 4.4.1: RevenueCat attributes now include affiliateo_visitor_id on every
@@ -23,7 +26,7 @@ plugins {
 // install (Meta / TikTok / Google Ads) gets its source labelled server-side
 // with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-version = "4.8.1"
+version = "4.8.2"
 
 android {
     namespace = "com.affiliateo.sdk"
@@ -31,6 +34,9 @@ android {
 
     defaultConfig {
         minSdk = 24
+        // Shipped inside the AAR and applied by every app that shrinks its
+        // release build. See the file for why it exists.
+        consumerProguardFiles("consumer-rules.pro")
     }
 
     compileOptions {
