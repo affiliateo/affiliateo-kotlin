@@ -47,4 +47,12 @@ data class AffiliateoState(
     val obfuscatedAccountId: String? = null
 )
 
+/** What a purchase reported with `Affiliateo.purchase` bought. */
+enum class PurchaseKind(internal val wire: String) {
+    /** The first payment of a subscription. */
+    SUBSCRIPTION("subscription"),
+    /** A one-time purchase (lifetime access, a pack of credits). */
+    ONE_TIME("one_time"),
+}
+
 class AffiliateoException(message: String) : Exception(message)

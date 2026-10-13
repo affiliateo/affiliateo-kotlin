@@ -12,3 +12,22 @@
     public void setAttributes(java.util.Map);
     public java.lang.String getAppUserID();
 }
+
+# The same for the advertising ids (AdIdentifiers.kt, 4.9.0): the Google
+# advertising ID comes from Google Play services and the Meta SDK's anonymous
+# id from the Meta SDK, both looked up by name so the SDK depends on neither.
+# Without these a shrunk release build renames them and the lookup quietly
+# finds nothing. In an app without them they match nothing, and -dontwarn
+# keeps R8 quiet about classes the app never ships.
+-keep class com.google.android.gms.ads.identifier.AdvertisingIdClient {
+    public static com.google.android.gms.ads.identifier.AdvertisingIdClient$Info getAdvertisingIdInfo(android.content.Context);
+}
+-keep class com.google.android.gms.ads.identifier.AdvertisingIdClient$Info {
+    public java.lang.String getId();
+    public boolean isLimitAdTrackingEnabled();
+}
+-keep class com.facebook.appevents.AppEventsLogger {
+    public static java.lang.String getAnonymousAppDeviceGUID(android.content.Context);
+}
+-dontwarn com.google.android.gms.ads.identifier.**
+-dontwarn com.facebook.appevents.**

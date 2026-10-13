@@ -13,7 +13,8 @@ internal class AffiliateoClient(private val apiUrl: String = "https://affiliateo
         campaignId: String,
         deviceId: String,
         deviceInfo: DeviceInfo,
-        installReferrer: String? = null
+        installReferrer: String? = null,
+        adIdentifiers: AdIdentifiers? = null
     ): IdentifyResponse = withContext(Dispatchers.IO) {
         val url = URL("${apiUrl.trimEnd('/')}/api/v1/mobile/identify")
         val conn = url.openConnection() as HttpURLConnection
@@ -35,6 +36,8 @@ internal class AffiliateoClient(private val apiUrl: String = "https://affiliateo
             // Play Install Referrer — lets the backend label a paid-ad
             // install's source (Meta / TikTok / Google Ads).
             installReferrer?.let { put("install_referrer", it) }
+            // Advertising ids (4.9.0): only what the person allowed, see AdIdentifiers.
+            adIdentifiers?.toMap()?.forEach { (key, value) -> if (value != null) put(key, value) }
         }
 
         conn.outputStream.use { it.write(body.toString().toByteArray()) }

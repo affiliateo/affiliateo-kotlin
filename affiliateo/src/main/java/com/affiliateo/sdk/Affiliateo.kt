@@ -157,6 +157,9 @@ object Affiliateo {
                     // almost always happens after we started. Unchanged ids are
                     // a no-op server-side, so the repeat is free.
                     reportRevenueCatAppUserId()
+                    // A person can switch ad personalisation off (or back on)
+                    // in the phone's settings while the app is away.
+                    reportAdIdentifiersIfChanged()
                 }
                 activeCount++
             }
@@ -205,6 +208,112 @@ object Affiliateo {
             "timestamp" to nowIso(),
             "metadata" to merged,
         ))
+    }
+
+    /**
+     * Report a purchase to the ad networks this app sends its sales to. Call
+     * it on your paywall, right after a purchase succeeds:
+     *
+     * ```kotlin
+     * // RevenueCat
+     * Purchases.sharedInstance.purchaseWith(PurchaseParams.Builder(activity, pkg).build(),
+     *     onError = { _, _ -> },
+     *     onSuccess = { transaction, _ ->
+     *         val orderId = transaction?.orderId
+     *         if (orderId != null) {
+     *             Affiliateo.purchaseMicros(
+     *                 transactionId = orderId,
+     *                 productId = pkg.product.id,
+     *                 priceAmountMicros = pkg.product.price.amountMicros,
+     *                 currency = pkg.product.price.currencyCode,
+     *             )
+     *         }
+     *     })
+     * ```
+     *
+     * [transactionId] is Google Play's ORDER id for this payment ("GPA.…").
+     * Affiliateo keys the report on it, so a payment your payment provider
+     * ALSO reports (RevenueCat, Google Play or Adapty connected in Affiliateo)
+     * goes to each network once. [price] is in normal units (59.99).
+     *
+     * Optional when a payment provider is connected to the app in Affiliateo:
+     * first payments are then reported without it. What this call adds is speed
+     * and the phone's own network address, which the networks match on. It
+     * records no sale and moves no money.
+     */
+    @JvmStatic
+    @JvmOverloads
+    fun purchase(
+        transactionId: String,
+        productId: String,
+        price: Double,
+        currency: String,
+        kind: PurchaseKind = PurchaseKind.SUBSCRIPTION,
+    ) {
+        if (optedOut) return
+        val txId = transactionId.trim()
+        if (txId.isEmpty() || txId.length > 200) return
+        val code = currency.trim().uppercase()
+        if (code.length != 3 || price.isNaN() || price < 0) return
+        val ctx = appContext ?: return
+        val cid = campaignId ?: return
+        val did = deviceId ?: return
+        val q = queue ?: return
+        log("purchase", "transaction=$txId, product=$productId, price=$price, currency=$code")
+        scope?.launch {
+            // The ids as they are NOW, off the main thread.
+            val ids = withContext(Dispatchers.IO) { AdIdentifiers.read(ctx) }
+            q.enqueue(
+                endpoint = "$apiUrl/api/v1/mobile/purchase",
+                payload = mapOf<String, Any?>(
+                    "campaign_id" to cid,
+                    "device_id" to did,
+                    "transaction_id" to txId,
+                    "product_id" to productId,
+                    // A string, so a Double never turns into 59.989999999999995.
+                    "price" to java.math.BigDecimal.valueOf(price).toPlainString(),
+                    "currency" to code,
+                    "kind" to kind.wire,
+                    "platform" to "android",
+                ) + ids.toMap(),
+            )
+            // The paywall is often the last screen before the person leaves;
+            // do not wait for the timer.
+            q.flush()
+        }
+    }
+
+    /** [purchase] with the price in micros, the unit Google Play Billing and RevenueCat hand you. */
+    @JvmStatic
+    @JvmOverloads
+    fun purchaseMicros(
+        transactionId: String,
+        productId: String,
+        priceAmountMicros: Long,
+        currency: String,
+        kind: PurchaseKind = PurchaseKind.SUBSCRIPTION,
+    ) = purchase(transactionId, productId, priceAmountMicros / 1_000_000.0, currency, kind)
+
+    /** What the last identify (or ad-ids call) told the server about ad tracking. */
+    @Volatile private var lastSentTracking: Boolean? = null
+    @Volatile private var adIdsSent = false
+
+    private fun reportAdIdentifiersIfChanged() {
+        if (!adIdsSent) return
+        val ctx = appContext ?: return
+        val cid = campaignId ?: return
+        val did = deviceId ?: return
+        val q = queue ?: return
+        scope?.launch {
+            val ids = withContext(Dispatchers.IO) { AdIdentifiers.read(ctx) }
+            if (ids.trackingAllowed == lastSentTracking) return@launch
+            lastSentTracking = ids.trackingAllowed
+            log("ad ids changed", "tracking_allowed=${ids.trackingAllowed}")
+            q.enqueue(
+                endpoint = "$apiUrl/api/v1/mobile/ad-ids",
+                payload = mapOf<String, Any?>("campaign_id" to cid, "device_id" to did) + ids.toMap(),
+            )
+        }
     }
 
     /**
@@ -405,7 +514,11 @@ object Affiliateo {
             // paid-ad install gets its source labelled server-side. Best-effort;
             // never blocks identify for more than the Play Store handshake.
             val installReferrer = try { InstallReferrer.get(context) } catch (_: Exception) { null }
-            val result = client.identify(campaignId, deviceId, deviceInfo, installReferrer)
+            // Off the main thread: the Play services lookup blocks.
+            val adIdentifiers = withContext(Dispatchers.IO) { AdIdentifiers.read(context) }
+            val result = client.identify(campaignId, deviceId, deviceInfo, installReferrer, adIdentifiers)
+            lastSentTracking = adIdentifiers.trackingAllowed
+            adIdsSent = true
 
             // Mint and register the Play Billing obfuscatedAccountId for
             // native Google Play attribution. Persisted per (campaignId, refCode)

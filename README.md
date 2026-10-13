@@ -18,7 +18,7 @@ In your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.github.affiliateo:affiliateo-kotlin:4.8.2")
+    implementation("com.github.affiliateo:affiliateo-kotlin:4.9.0")
 }
 ```
 
@@ -75,6 +75,59 @@ Button(onClick = {
     Text("Continue")
 }
 ```
+
+## Report purchases to your ad networks
+
+When you run app campaigns on Meta, TikTok or Snapchat through Affiliateo,
+Affiliateo tells those networks each time somebody FIRST pays (a
+subscription's first charge, or a one-time purchase), so the campaigns learn
+who pays rather than who installs. Set it up in Affiliateo: your ad network's
+settings, **Send app sales**, then paste the network's id for your app.
+
+There are two ways a payment reaches Affiliateo, and you can use either or
+both. Affiliateo sends each payment once.
+
+1. **Your payment provider (nothing to add here).** If RevenueCat, Google
+   Play or Adapty is connected to your app in Affiliateo, first payments are
+   reported on their own.
+2. **One line on your paywall.** Right after a purchase succeeds:
+
+```kotlin
+// RevenueCat
+Purchases.sharedInstance.purchaseWith(
+    PurchaseParams.Builder(activity, pkg).build(),
+    onError = { _, _ -> },
+    onSuccess = { transaction, _ ->
+        val orderId = transaction?.orderId
+        if (orderId != null) {
+            Affiliateo.purchaseMicros(
+                transactionId = orderId,
+                productId = pkg.product.id,
+                priceAmountMicros = pkg.product.price.amountMicros,
+                currency = pkg.product.price.currencyCode,
+            )
+        }
+    },
+)
+```
+
+`transactionId` is Google Play's order id ("GPA.…"). With Play Billing
+directly, pass `purchase.orderId` and the price from the product details.
+The paywall line is quicker and carries the phone's network address, which
+the networks match on. It records no sale and moves no money: revenue and
+commissions still come only from your payment provider.
+
+**The advertising ID.** The networks match far better with the Google
+advertising ID, and since Android 13 your app has to declare it:
+
+```xml
+<uses-permission android:name="com.google.android.gms.permission.AD_ID" />
+```
+
+The SDK does not declare it for you, because it is a statement your app makes
+in its Play Store data safety answers. The id is only sent while the person
+has ad personalisation on. If your app ships the Meta SDK, the SDK finds it
+and links the two on its own.
 
 ## What it does
 
