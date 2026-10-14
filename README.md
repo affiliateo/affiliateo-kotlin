@@ -126,17 +126,32 @@ advertising ID, and since Android 13 your app has to declare it:
 
 The SDK does not declare it for you, because it is a statement your app makes
 in its Play Store data safety answers. The id is only sent while the person
-has ad personalisation on. If your app ships the Meta SDK, the SDK finds it
-and links the two on its own; keep the Meta SDK's automatic purchase logging
-off.
+has ad personalisation on. If your app ships the Meta SDK, this SDK finds it
+and sends its anonymous id with each payment, so Meta ties the payment to the
+install its SDK saw; turn the Meta SDK's in-app purchase logging off (below).
 
-**Send each network your sales one way only.** If your app also reports
-purchases to Meta, TikTok or Snapchat with that network's own SDK (Meta's SDK
-does it by itself while its automatic purchase logging is on), turn that
-purchase reporting off, or leave **Send app sales** off for that network.
+**Installs come from the network's own SDK.** Affiliateo sends payments, not
+installs. To run app campaigns on Meta, TikTok or Snapchat, add that network's
+SDK (or a measurement partner like AppsFlyer) for installs, and keep **Send app
+sales** on for payments.
+
+**Send each network your sales one way only.** Keep that SDK's installs but turn
+its purchase reporting off, or leave **Send app sales** off for that network.
 Otherwise the network counts every sale twice: it only matches two reports of
 one sale when both carry the same id, and its own SDK doesn't send the store's
 transaction id. Affiliateo's own two ways are matched on it and go out once.
+
+- **Meta:** in your app on Meta for Developers, under Settings > Basic, set the
+  switch that logs in-app purchases automatically to No on the Android card.
+  Leave `com.facebook.sdk.AutoLogAppEventsEnabled` on: turning it off stops
+  installs too.
+- **TikTok:** its Android SDK reports purchases only after `enableAutoIapTrack()`,
+  `trackGooglePlayPurchase()` or a Purchase event your app tracks itself, so do
+  none of those.
+- **Snapchat:** don't send purchases from its SDK.
+- **A measurement partner** (AppsFlyer, Adjust, Branch, Singular, Kochava) that
+  forwards purchases to the network counts too: stop forwarding them, or leave
+  **Send app sales** off for that network.
 
 ## What it does
 
@@ -170,7 +185,7 @@ you want to control the timing:
 ```kotlin
 import com.revenuecat.purchases.Purchases
 
-// after Purchases.configure(...) — optional, the SDK already does this
+// after Purchases.configure(...), optional: the SDK already does this
 Affiliateo.setRevenueCatUser(Purchases.sharedInstance.appUserID)
 ```
 
