@@ -51,7 +51,9 @@ internal class AffiliateoClient(private val apiUrl: String = "https://affiliateo
 
         IdentifyResponse(
             visitorId = json.getString("visitor_id"),
-            refCode = json.optString("ref_code", null),
+            // optString("ref_code", null) answers the TEXT "null" for a JSON null,
+            // which every install that did not come from an affiliate gets.
+            refCode = if (json.isNull("ref_code")) null else json.optString("ref_code").takeIf { it.isNotEmpty() },
             matched = json.getBoolean("matched")
         )
     }
