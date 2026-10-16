@@ -520,27 +520,17 @@ object Affiliateo {
             lastSentTracking = adIdentifiers.trackingAllowed
             adIdsSent = true
 
-            // Mint and register the Play Billing obfuscatedAccountId for
-            // native Google Play attribution. Persisted per (campaignId, refCode)
-            // so the customer's purchase chain (initial sub + renewals + refunds)
-            // all carry the same id Google stamped at first purchase.
-            //
-            // Best-effort: a failed registration here means the next app
-            // launch retries (the backend dedups via the unique constraint
-            // on mobile_app_visitors.google_obfuscated_account_id).
-            var obfuscatedAccountId: String? = null
-            if (result.refCode != null) {
-                obfuscatedAccountId = getOrMintObfuscatedAccountId(
-                    context, campaignId, result.refCode
-                )
-                scope?.launch {
-                    try {
-                        client.registerGoogleAccountId(
-                            campaignId, result.visitorId, obfuscatedAccountId
-                        )
-                    } catch (_: Exception) { /* best effort */ }
-                }
-            }
+            // Google Play native attribution (4.10.0). The purchase tag is the
+            // visitor id itself, for EVERY device, matched or organic (a UUID,
+            // well inside Play's 64-character limit). The app reads it via
+            // state.obfuscatedAccountId and passes it to
+            // BillingFlowParams.setObfuscatedAccountId(), Google stamps it onto
+            // the whole purchase chain (first sub, renewals, refunds), and the
+            // server matches it to this visitor directly, so nothing is
+            // registered from here. Ids minted per affiliate before 4.10.0
+            // keep working server side, and a chain bought with one keeps
+            // carrying it.
+            val obfuscatedAccountId = result.visitorId.takeIf { it.isNotEmpty() && it.length <= 64 }
 
             state = AffiliateoState(
                 refCode = result.refCode,
@@ -570,31 +560,6 @@ object Affiliateo {
             state = state.copy(isLoading = false)
         }
     }
-
-    /**
-     * Get or mint a stable UUID v4 for (campaignId, refCode). Persisted via
-     * SharedPreferences so the same id is reused across launches for the
-     * same affiliate match.
-     */
-    private fun getOrMintObfuscatedAccountId(
-        context: Context,
-        campaignId: String,
-        refCode: String
-    ): String {
-        val prefs = context.getSharedPreferences("affiliateo", Context.MODE_PRIVATE)
-        val key = "google_obfuscated_account_id:$campaignId:$refCode"
-        val stored = prefs.getString(key, null)
-        if (stored != null && isUuidV4(stored)) return stored
-        val fresh = java.util.UUID.randomUUID().toString()
-        prefs.edit().putString(key, fresh).apply()
-        return fresh
-    }
-
-    private val uuidRegex = Regex(
-        "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-        RegexOption.IGNORE_CASE
-    )
-    private fun isUuidV4(s: String): Boolean = uuidRegex.matches(s)
 
     private fun sendSessionEvent(type: String) {
         // Route through the queue so foreground pings survive a flaky

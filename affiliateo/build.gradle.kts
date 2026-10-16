@@ -10,6 +10,12 @@ plugins {
     id("maven-publish")
 }
 
+// 4.10.0: every user gets the purchase tag (the Affiliateo visitor id), so
+//         sales from people who did not come through an affiliate are tied
+//         to their phone too. state.obfuscatedAccountId is now the visitor id
+//         for every device (it was only set for affiliate matches, from a
+//         per-affiliate id the SDK minted and registered). Same name, no code
+//         changes in the app.
 // 4.8.2: ships a shrinker rule (consumer-rules.pro) that keeps the RevenueCat
 //        names the SDK looks up at run time. Without it a shrunk (R8) release
 //        build renamed them and RevenueCat tagging silently did nothing.
@@ -26,7 +32,7 @@ plugins {
 // install (Meta / TikTok / Google Ads) gets its source labelled server-side
 // with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-version = "4.9.0"
+version = "4.10.0"
 
 android {
     namespace = "com.affiliateo.sdk"

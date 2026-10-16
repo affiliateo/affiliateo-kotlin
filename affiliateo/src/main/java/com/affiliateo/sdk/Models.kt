@@ -37,12 +37,15 @@ data class AffiliateoState(
     val isLoading: Boolean,
     val visitorId: String?,
     /**
-     * Play Billing obfuscatedAccountId UUID. Pass this to BillingFlowParams
-     * via setObfuscatedAccountId() at purchase time so Google stamps it onto
-     * the resulting RTDN payloads, which our backend resolves to the affiliate.
+     * Play Billing obfuscatedAccountId: the Affiliateo visitor id of this
+     * device (a UUID). Every user gets one, whether or not they came through
+     * an affiliate. Always pass it to BillingFlowParams via
+     * setObfuscatedAccountId() at purchase time, so Google stamps it onto the
+     * purchase and Affiliateo ties the sale (and every renewal and refund
+     * after it) to this phone, and to the affiliate when there is one.
      *
-     * Null before identify completes or when the device isn't matched to any
-     * affiliate.
+     * Null before identify succeeds (so also when the SDK starts opted out)
+     * and after reset().
      */
     val obfuscatedAccountId: String? = null
 )

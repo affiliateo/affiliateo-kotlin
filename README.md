@@ -18,7 +18,7 @@ In your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.github.affiliateo:affiliateo-kotlin:4.9.0")
+    implementation("com.github.affiliateo:affiliateo-kotlin:4.10.0")
 }
 ```
 
@@ -75,6 +75,25 @@ Button(onClick = {
     Text("Continue")
 }
 ```
+
+## Tag every purchase
+
+`Affiliateo.state.obfuscatedAccountId` is the purchase tag for this phone (its
+Affiliateo visitor id). Every user gets one, whether or not they came through
+an affiliate, so always pass it to the purchase call. Google stamps it onto the
+sale and on every renewal and refund after it, and Affiliateo ties each one to
+this phone, and to the affiliate when there is one.
+
+```kotlin
+// Play Billing
+val params = BillingFlowParams.newBuilder()
+    .setProductDetailsParamsList(productDetailsParamsList)
+    .apply { Affiliateo.state.obfuscatedAccountId?.let { setObfuscatedAccountId(it) } }
+    .build()
+billingClient.launchBillingFlow(activity, params)
+```
+
+It is null only until the SDK's first identify succeeds (and after `reset()`).
 
 ## Report purchases to your ad networks
 
@@ -159,7 +178,7 @@ transaction id. Affiliateo's own two ways are matched on it and go out once.
 - **Tracks sessions** automatically (app foreground)
 - **Matches affiliate referrals** via fingerprint matching
 - **Sets RevenueCat attributes** automatically if RevenueCat is installed
-- **IAP attribution** via Play Billing `obfuscatedAccountId`
+- **IAP attribution** via Play Billing `obfuscatedAccountId`, for every user (see Tag every purchase)
 
 ## Giving affiliates free access
 
