@@ -96,8 +96,9 @@ internal class AffiliateoClient(private val apiUrl: String = "https://affiliateo
     }
 
     /**
-     * Tell Affiliateo who is signed in on this device. user_id only. the SDK
-     * does NOT accept, collect, or transmit email or any other PII.
+     * Tell Affiliateo who is signed in on this device: the user id, and since
+     * 4.12.0 the SHA-256 of their email when the app gave one (never the
+     * address itself), which is what free access is matched on.
      *
      * Since 4.11.0 the answer is read rather than ignored:
      * - [IdentifyUserResult.Linked]: the server has it. The outcome says what
@@ -114,7 +115,8 @@ internal class AffiliateoClient(private val apiUrl: String = "https://affiliateo
     suspend fun identifyUser(
         campaignId: String,
         deviceId: String,
-        userId: String
+        userId: String,
+        emailSha256: String? = null
     ): IdentifyUserResult = withContext(Dispatchers.IO) {
         val url = URL("${apiUrl.trimEnd('/')}/api/v1/mobile/identify-user")
         val conn = url.openConnection() as HttpURLConnection
@@ -126,6 +128,8 @@ internal class AffiliateoClient(private val apiUrl: String = "https://affiliateo
             put("campaign_id", campaignId)
             put("device_id", deviceId)
             put("user_id", userId)
+            // Left out when there is no email: the server keeps what it has.
+            emailSha256?.let { put("email_sha256", it) }
         }
 
         conn.outputStream.use { it.write(body.toString().toByteArray()) }
@@ -179,6 +183,38 @@ internal class AffiliateoClient(private val apiUrl: String = "https://affiliateo
             null
         }
         if (json == null || json.isNull("outcome")) null else json.optString("outcome").takeIf { it.isNotEmpty() }
+    }
+
+    /**
+     * Whether the app owner gave the person signed in on this device free
+     * access (4.12.0). POST /api/v1/mobile/free-access. Throws when there is no
+     * usable answer (offline, a non-2xx, a reply that is not one), so the
+     * caller can fall back to the saved answer.
+     */
+    suspend fun freeAccess(campaignId: String, deviceId: String): FreeAccess = withContext(Dispatchers.IO) {
+        val url = URL("${apiUrl.trimEnd('/')}/api/v1/mobile/free-access")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.doOutput = true
+        // An app may hold its paywall for this answer, and HttpURLConnection
+        // waits forever by default: past this the saved answer is used.
+        conn.connectTimeout = 10_000
+        conn.readTimeout = 10_000
+
+        val body = JSONObject().apply {
+            put("campaign_id", campaignId)
+            put("device_id", deviceId)
+        }
+
+        conn.outputStream.use { it.write(body.toString().toByteArray()) }
+
+        val code = conn.responseCode
+        if (code !in 200..299) {
+            throw AffiliateoException("Free access check failed: $code")
+        }
+        FreeAccessCache.parseReply(conn.inputStream.bufferedReader().readText())
+            ?: throw AffiliateoException("Free access check failed: not a reply")
     }
 
     /**

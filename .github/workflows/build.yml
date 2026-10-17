@@ -39,9 +39,10 @@ jobs:
           # touched the SDK.
           gradle-version: '8.5'
 
-      - name: Assemble
-        # assemble, not build: `build` also runs lint and unit tests, and this
-        # library ships neither. The question being answered here is only
-        # "does it compile", so anything beyond that is noise that would fail
-        # for reasons unrelated to the code that just changed.
-        run: gradle assemble --no-daemon --stacktrace
+      - name: Assemble and test
+        # assemble + test, not build: `build` also runs lint, which this
+        # library does not ship a config for, so it would fail for reasons
+        # unrelated to the code that just changed. The unit tests (since
+        # 4.12.0: the email hash and the free access rules) run on the plain
+        # JVM, no emulator.
+        run: gradle assemble test --no-daemon --stacktrace

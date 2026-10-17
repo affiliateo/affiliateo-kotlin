@@ -78,6 +78,23 @@ object Affiliateo {
     /** A logout call on its way; a sign-in waits for it. */
     private var logoutJob: Job? = null
 
+    // The signed-in user's email as a SHA-256 (4.12.0), never the address,
+    // kept with the user id so the once-per-launch re-send carries it too.
+    private const val EMAIL_HASH_KEY = "affiliateo_email_sha256"
+    /** SHA-256 of the signed-in user's email, mirrored in SharedPreferences; null when the app gave none. */
+    @Volatile private var emailHash: String? = null
+    /** The email hash the server confirmed along with [syncedUser]. Main-thread only. */
+    private var syncedEmailHash: String? = null
+    /**
+     * Goes up on sign-out and when a different user signs in, so a free access
+     * answer for the person before is neither saved nor returned.
+     */
+    private val freeAccessEpoch = java.util.concurrent.atomic.AtomicInteger()
+    /** This launch's first identify (with the sign-in sync after it); freeAccess() waits for it. */
+    @Volatile private var launchJob: Job? = null
+    /** The latest identify or logout call; freeAccess() waits for it too. */
+    @Volatile private var signInJob: Job? = null
+
     var state: AffiliateoState = AffiliateoState(
         refCode = null,
         isMatched = false,
@@ -139,10 +156,21 @@ object Affiliateo {
         // Who was signed in at the end of the last launch, and a sign-out the
         // server never heard. An identify() or logout() made before configure()
         // wins, except a sign-in while opted out, which does nothing.
+        val storedUser = AffiliateoUserId.usable(prefs.getString(USER_ID_KEY, null))
+        val storedHash = if (storedUser == null) null else prefs.getString(EMAIL_HASH_KEY, null)
         if (userTouched && !(optedOut && userId != null)) {
+            // The saved free access answer could not be cleared before there was
+            // a context: forget it now when that call signed out or switched user.
+            if (logoutPending || userId != storedUser) {
+                prefs.edit().remove(FreeAccessCache.KEY).apply()
+            } else if (emailHash == null) {
+                // The same user again with no email: keep the one stored.
+                emailHash = storedHash
+            }
             saveUserState()
         } else {
-            userId = AffiliateoUserId.usable(prefs.getString(USER_ID_KEY, null))
+            userId = storedUser
+            emailHash = storedHash
             logoutPending = userId == null && prefs.getString(LOGOUT_PENDING_KEY, null) == "true"
         }
 
@@ -165,7 +193,7 @@ object Affiliateo {
         // calls Affiliateo.page(name) per screen, matching the Mixpanel /
         // Amplitude mobile model. predictable + debuggable +
         // no ghost events.
-        scope?.launch {
+        launchJob = scope?.launch {
             identify(context.applicationContext)
         }
 
@@ -352,7 +380,8 @@ object Affiliateo {
      * The user signed out (4.11.0). Call it on sign-out: this device starts
      * over as a new anonymous customer of the app, so whoever signs in next
      * (or nobody) is not counted as the person who just left, and everything
-     * already recorded stays with them. Forgets the stored user id.
+     * already recorded stays with them. Forgets the stored user id, their
+     * email hash and the saved free access answer.
      *
      * Tracking carries on: same device id, same visitor id, same
      * obfuscatedAccountId, nothing to restart. A sign-out made offline (or
@@ -364,12 +393,18 @@ object Affiliateo {
         log("logout requested")
         userTouched = true
         userId = null
+        emailHash = null
         logoutPending = true
+        // Right away: a freeAccess() that cannot reach the server must not
+        // unlock from the person who just left.
+        freeAccessEpoch.incrementAndGet()
+        clearFreeAccess()
         saveUserState()
         scope?.launch {
             syncedUser = null
+            syncedEmailHash = null
             sendLogout()
-        }
+        }?.also { signInJob = it }
     }
 
     /**
@@ -497,11 +532,15 @@ object Affiliateo {
      * "nobody" ("null", "undefined", "guest", "0", RevenueCat's
      * $RCAnonymousID:...).
      *
-     * user_id only. the SDK does NOT accept, collect, or transmit
-     * email or any other PII.
+     * [email] (4.12.0, optional) is the address the person signed in with. It
+     * never leaves the phone: the SDK sends only its SHA-256 (trimmed and
+     * lowercased first), which is how an affiliate the app owner gave free
+     * access is recognised (see [freeAccess]). Leave it out and the hash
+     * already stored for this user is kept.
      */
     @JvmStatic
-    fun identify(userId: String) {
+    @JvmOverloads
+    fun identify(userId: String, email: String? = null) {
         if (optedOut) {
             log("identify skipped: opted out")
             return
@@ -511,7 +550,17 @@ object Affiliateo {
             log("identify skipped: not a user id (empty, over 128 characters, or a placeholder like \"null\", \"guest\" or \"0\")", "user_id=$userId")
             return
         }
+        val hash = AffiliateoEmail.sha256Hex(email)
         userTouched = true
+        if (this.userId != uid) {
+            // Somebody else: their own email (or none), and no free access
+            // answer that belonged to the person before.
+            emailHash = hash
+            freeAccessEpoch.incrementAndGet()
+            clearFreeAccess()
+        } else if (hash != null) {
+            emailHash = hash
+        }
         this.userId = uid
         // A sign-in replaces a sign-out that never reached the server: a
         // different person signing in switches the device anyway.
@@ -520,26 +569,98 @@ object Affiliateo {
         // Before configure(): sent once configure's identify has finished.
         scope?.launch {
             // Already confirmed this launch: nothing to send.
-            if (syncedUser == uid) return@launch
+            if (syncedUser == uid && syncedEmailHash == emailHash) return@launch
             sendIdentifyUser(uid)
-        }
+        }?.also { signInJob = it }
     }
 
-    /** Mirror the signed-in user and the pending sign-out to SharedPreferences. */
+    /** Mirror the signed-in user, their email hash and the pending sign-out to SharedPreferences. */
     private fun saveUserState() {
         val ctx = appContext ?: return
         ctx.getSharedPreferences(OPT_OUT_PREFS, Context.MODE_PRIVATE).edit().apply {
             val uid = userId
             if (uid != null) putString(USER_ID_KEY, uid) else remove(USER_ID_KEY)
+            val hash = emailHash
+            if (uid != null && hash != null) putString(EMAIL_HASH_KEY, hash) else remove(EMAIL_HASH_KEY)
             if (logoutPending) putString(LOGOUT_PENDING_KEY, "true") else remove(LOGOUT_PENDING_KEY)
         }.apply()
+    }
+
+    /** Forget the saved free access answer (no-op before configure(), which then does it). */
+    private fun clearFreeAccess() {
+        val ctx = appContext ?: return
+        ctx.getSharedPreferences(OPT_OUT_PREFS, Context.MODE_PRIVATE).edit().remove(FreeAccessCache.KEY).apply()
+    }
+
+    /**
+     * Whether the app owner gave the signed-in person free access from their
+     * Affiliateo dashboard (4.12.0). For apps that sell with Google Play
+     * Billing, StoreKit, Adapty or Stripe directly, where Affiliateo cannot
+     * hand out a subscription itself; apps on RevenueCat get a RevenueCat
+     * entitlement instead and need none of this.
+     *
+     * ```kotlin
+     * Affiliateo.identify(user.id, email = user.email)
+     * lifecycleScope.launch {
+     *     if (Affiliateo.freeAccess().active) unlock()
+     * }
+     * ```
+     *
+     * The person is recognised by the email given to [identify], so call that
+     * first; the check waits (up to 10 seconds) for this launch's first
+     * identify and the latest sign-in or sign-out to reach the server.
+     * `productId` names the plan the owner chose (null means full access) and
+     * `expiresAt` when it ends (null means no end).
+     *
+     * Never throws (a cancelled caller is cancelled as usual). Each answer is
+     * saved on the phone; when the server cannot be reached (or the person has
+     * opted out, when nothing is sent) the saved answer is used while its end
+     * is still ahead and it is at most 7 days old, otherwise the answer is no
+     * access. Signing out, or a different user signing in, forgets the saved
+     * answer. Before [configure] it answers no access.
+     */
+    @JvmStatic
+    suspend fun freeAccess(): FreeAccess {
+        val ctx = appContext ?: return FreeAccess.INACTIVE
+        val prefs = ctx.getSharedPreferences(OPT_OUT_PREFS, Context.MODE_PRIVATE)
+        fun saved(): FreeAccess =
+            FreeAccessCache.offlineAnswer(FreeAccessCache.decode(prefs.getString(FreeAccessCache.KEY, null)), System.currentTimeMillis())
+
+        withTimeoutOrNull(10_000L) {
+            launchJob?.join()
+            signInJob?.join()
+        }
+        if (optedOut) {
+            return saved().also { log("freeAccess: opted out, answered from the phone", "active=${it.active}") }
+        }
+        val client = client ?: return saved()
+        val did = deviceId ?: return saved()
+        val cid = campaignId ?: return saved()
+        val epoch = freeAccessEpoch.get()
+        return try {
+            val answer = client.freeAccess(cid, did)
+            // Signed out, or somebody else signed in, while this was asked.
+            if (epoch != freeAccessEpoch.get()) return FreeAccess.INACTIVE
+            prefs.edit().putString(
+                FreeAccessCache.KEY,
+                FreeAccessCache.encode(FreeAccessCache.Entry(answer, System.currentTimeMillis())),
+            ).apply()
+            log("freeAccess", "active=${answer.active}, product_id=${answer.productId}, expires_at=${answer.expiresAt}")
+            answer
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            if (epoch != freeAccessEpoch.get()) return FreeAccess.INACTIVE
+            saved().also { log("freeAccess failed, answered from the phone", "active=${it.active}") }
+        }
     }
 
     /**
      * POST /api/v1/mobile/identify-user for the signed-in user. A 400 is not
      * retried (and the stored id is forgotten); a network or server error
      * leaves it stored for the next launch; NotLinked is sent once more when
-     * this launch's first identify finished while it was on its way.
+     * this launch's first identify finished while it was on its way, and a
+     * new email given while it was on its way is sent right after.
      * Runs on the Main scope.
      */
     private suspend fun sendIdentifyUser(uid: String) {
@@ -547,7 +668,7 @@ object Affiliateo {
         if (userInFlight == uid) return
         userInFlight = uid
         try {
-            repeat(2) {
+            repeat(3) {
                 // A sign-out still on its way lands first, so it cannot undo this.
                 logoutJob?.join()
                 val client = client ?: return
@@ -555,8 +676,9 @@ object Affiliateo {
                 val cid = campaignId ?: return
                 if (optedOut || userId != uid) return
                 val beforeFirstOpen = !firstOpenDone
+                val sentHash = emailHash
                 val result = try {
-                    client.identifyUser(cid, did, uid)
+                    client.identifyUser(cid, did, uid, sentHash)
                 } catch (_: Exception) {
                     log("identify failed (network), sent again next launch", "user_id=$uid")
                     return
@@ -566,12 +688,15 @@ object Affiliateo {
                 when (result) {
                     is IdentifyUserResult.Linked -> {
                         syncedUser = uid
-                        log("identify (user)", "user_id=$uid, outcome=${result.outcome}")
-                        return
+                        syncedEmailHash = sentHash
+                        log("identify (user)", "user_id=$uid, outcome=${result.outcome}, email_sha256=$sentHash")
+                        // A new email came in while this was on its way.
+                        if (emailHash == sentHash) return
                     }
                     IdentifyUserResult.Refused -> {
                         log("identify refused by the server (400), not retried", "user_id=$uid")
                         userId = null
+                        emailHash = null
                         saveUserState()
                         return
                     }
@@ -626,7 +751,7 @@ object Affiliateo {
     private suspend fun syncSignedInUser() {
         val uid = userId
         if (uid != null) {
-            if (syncedUser != uid) sendIdentifyUser(uid)
+            if (syncedUser != uid || syncedEmailHash != emailHash) sendIdentifyUser(uid)
         } else if (logoutPending) {
             sendLogout()
         }
@@ -642,7 +767,7 @@ object Affiliateo {
      * sign-in and RevenueCat configuration happen at different moments, and an
      * app may do one without the other.
      *
-     * No email or other PII is sent, same as [identify].
+     * No email or other PII is sent.
      */
     @JvmStatic
     fun setRevenueCatUser(appUserId: String) {
@@ -701,9 +826,10 @@ object Affiliateo {
             log("identify success", "visitor=${result.visitorId}, matched=${result.matched}, ref=${result.refCode}")
 
             // The server knows this device now: bring it up to date on who is
-            // signed in.
+            // signed in. Joined at the end, so this launch's work (which
+            // freeAccess() waits for) includes it.
             firstOpenDone = true
-            scope?.launch { syncSignedInUser() }
+            val signInSync = scope?.launch { syncSignedInUser() }
 
             // Auto-set RevenueCat subscriber attributes. The visitor id goes
             // on EVERY identify (matched or organic): the webhook stamps it
@@ -719,6 +845,8 @@ object Affiliateo {
             // to add themselves, and an install step that gets skipped leaves
             // the feature silently dead with nothing to say why.
             reportRevenueCatAppUserId()
+
+            signInSync?.join()
         } catch (_: Exception) {
             log("identify failed (network error)")
             state = state.copy(isLoading = false)

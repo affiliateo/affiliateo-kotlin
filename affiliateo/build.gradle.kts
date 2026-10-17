@@ -10,6 +10,16 @@ plugins {
     id("maven-publish")
 }
 
+// 4.12.0: free access for apps that sell without RevenueCat (Google Play
+//         Billing, StoreKit, Adapty, Stripe). identify(userId, email) takes
+//         the signed-in person's email and sends only its SHA-256 (trimmed
+//         and lowercased first), never the address. New suspend
+//         Affiliateo.freeAccess() asks whether the app owner gave that person
+//         free access and answers FreeAccess(active, productId, expiresAt),
+//         the end as the ISO 8601 text the server sent; it never throws,
+//         saves each answer on the phone, and when offline uses the saved
+//         one while its end is ahead and it is at most 7 days old. logout()
+//         forgets it. First unit tests (src/test).
 // 4.11.0: sign-in and sign-out follow Affiliateo's customers (one person per
 //         app, the RevenueCat model). New logout() for sign-out: the device
 //         starts over as anonymous and tracking carries on with the same
@@ -42,7 +52,7 @@ plugins {
 // install (Meta / TikTok / Google Ads) gets its source labelled server-side
 // with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-version = "4.11.0"
+version = "4.12.0"
 
 android {
     namespace = "com.affiliateo.sdk"
@@ -102,6 +112,15 @@ dependencies {
     // Compose already have it on their classpath at runtime, so the
     // @Composable function resolves naturally.
     compileOnly("androidx.compose.runtime:runtime:1.5.4")
+
+    // Unit tests (4.12.0): the email hash and the free access rules, on the
+    // plain JVM. org.json is Android's own; the stub in android.jar throws
+    // off a phone, so the tests get the real one.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20231013")
+    // The Compose compiler plugin also runs over the tests and refuses to
+    // without the runtime it is compileOnly above for.
+    testImplementation("androidx.compose.runtime:runtime:1.5.4")
 }
 
 // Turns the release AAR into a Maven artifact JitPack can serve.

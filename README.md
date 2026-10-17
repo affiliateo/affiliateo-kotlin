@@ -18,7 +18,7 @@ In your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.github.affiliateo:affiliateo-kotlin:4.11.0")
+    implementation("com.github.affiliateo:affiliateo-kotlin:4.12.0")
 }
 ```
 
@@ -82,8 +82,8 @@ Say who is signed in after sign-in (and on launch while someone is), and call
 `logout()` on sign-out:
 
 ```kotlin
-// after sign-in
-Affiliateo.identify(user.id)
+// after sign-in (email is optional, see Giving affiliates free access)
+Affiliateo.identify(user.id, email = user.email)
 
 // on sign-out
 Affiliateo.logout()
@@ -100,8 +100,16 @@ The SDK remembers the signed-in id and sends it again once per launch, and an
 `identify()` made before `configure()` is kept and sent once it has run. Ids
 that mean "nobody" (`"null"`, `"guest"`, `"0"`, an empty string, RevenueCat's
 `$RCAnonymousID:...`, anything over 128 characters) are skipped, and nothing
-is sent while the person has opted out. **user_id only:** no email or other
-PII.
+is sent while the person has opted out. **No email address is ever sent:**
+when you pass `email`, the SDK sends only its SHA-256 (see below), and nothing
+else about the person.
+
+### What changed in 4.12.0
+
+- `identify(userId, email)` takes the signed-in person's email, for free
+  access. Only its SHA-256 leaves the phone.
+- New `Affiliateo.freeAccess()`, so apps that sell without RevenueCat can give
+  affiliates free access (see Giving affiliates free access).
 
 ### What changed in 4.11.0
 
@@ -221,8 +229,48 @@ transaction id. Affiliateo's own two ways are matched on it and go out once.
 
 ## Giving affiliates free access
 
-App owners can switch complimentary access on for an individual affiliate from
-their Affiliateo dashboard, which grants a promotional entitlement in their own
+App owners can switch free access on for an individual affiliate from the
+Affiliates table in their Affiliateo dashboard, choosing a plan and, if they
+like, an end date.
+
+### Apps on Google Play Billing, StoreKit, Adapty or Stripe (4.12.0)
+
+Apple and Google have no way for anyone but the person to start a
+subscription, so your app asks Affiliateo instead and unlocks itself:
+
+```kotlin
+// after sign-in: pass the email the person signed in with
+Affiliateo.identify(user.id, email = user.email)
+
+// wherever you decide what is unlocked (launch, paywall), in a coroutine
+lifecycleScope.launch {
+    val access = Affiliateo.freeAccess()
+    if (access.active) unlockPaidFeatures(access.productId) // null means full access
+}
+```
+
+- `active`: unlock when true.
+- `productId`: the store product id of the plan the owner chose. `null` means
+  full access.
+- `expiresAt`: when the free access ends, as the ISO 8601 text Affiliateo
+  sends (`"2026-11-17T12:00:00.000Z"`). `null` means no end date.
+
+The affiliate is recognised by email: the address the owner typed when
+switching it on, or else the one the affiliate uses on Affiliateo. **The
+address never leaves the phone.** The SDK sends only its SHA-256 (trimmed and
+lowercased first), and Affiliateo compares it with the same hash of the
+owner's address.
+
+`freeAccess()` never throws. It waits (up to 10 seconds) for the sign-in to
+reach Affiliateo first, so calling it right after `identify` works. Each
+answer is saved on the phone: when Affiliateo can't be reached, the saved one
+is used while its end date is still ahead and it is at most 7 days old,
+otherwise the answer is no access. `logout()`, or a different user signing in,
+forgets it. Called before `configure()`, it answers no access.
+
+### Apps on RevenueCat
+
+Switching free access on grants a promotional entitlement in the owner's own
 RevenueCat project.
 
 **Nothing to add to your code.** As of 4.7.0 the SDK reads your RevenueCat App
@@ -263,7 +311,7 @@ Notes:
 - Write-once per device. Sending a different ID for a device that is already
   bound is rejected, so a tampered client cannot repoint a device at another
   customer.
-- No email or other PII is sent, same as `identify()`.
+- No email or other PII is sent.
 
 ## Requirements
 
