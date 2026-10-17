@@ -10,6 +10,16 @@ plugins {
     id("maven-publish")
 }
 
+// 4.11.0: sign-in and sign-out follow Affiliateo's customers (one person per
+//         app, the RevenueCat model). New logout() for sign-out: the device
+//         starts over as anonymous and tracking carries on with the same
+//         device id, visitor id and obfuscatedAccountId. reset() is now the
+//         same as logout() (it used to clear obfuscatedAccountId until the app
+//         restarted). identify() skips placeholder ids ("null", "guest", "0",
+//         $RCAnonymousID:...), is kept when called before configure(), is
+//         stored and re-sent once per launch, and a sign-in that raced ahead
+//         of the launch's first identify is sent again. A different user
+//         signing in on the same device now switches it.
 // 4.10.0: every user gets the purchase tag (the Affiliateo visitor id), so
 //         sales from people who did not come through an affiliate are tied
 //         to their phone too. state.obfuscatedAccountId is now the visitor id
@@ -32,7 +42,7 @@ plugins {
 // install (Meta / TikTok / Google Ads) gets its source labelled server-side
 // with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-version = "4.10.0"
+version = "4.11.0"
 
 android {
     namespace = "com.affiliateo.sdk"

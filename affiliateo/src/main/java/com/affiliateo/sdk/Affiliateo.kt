@@ -56,6 +56,28 @@ object Affiliateo {
     private const val LOG_TAG = "Affiliateo"
     @Volatile private var debug: Boolean = false
 
+    // Who is signed in (4.11.0), kept in the same SharedPreferences file as
+    // the opt-out flag so the SDK can re-send it once per launch, and a
+    // sign-out the server has not heard yet. Same key names as the React
+    // Native and Swift SDKs.
+    private const val USER_ID_KEY = "affiliateo_user_id"
+    private const val LOGOUT_PENDING_KEY = "affiliateo_logout_pending"
+    /** The signed-in user id, mirrored in SharedPreferences. */
+    @Volatile private var userId: String? = null
+    /** A sign-out the server has not heard yet (offline, opted out, or made before configure()). */
+    @Volatile private var logoutPending = false
+    /** identify() or logout() ran before configure() could read the stored values. */
+    @Volatile private var userTouched = false
+    /** This launch's first /api/v1/mobile/identify succeeded, so a sign-in can link to the device. */
+    @Volatile private var firstOpenDone = false
+    // Main-thread only (every coroutine below runs on the Main scope):
+    /** The user the server confirmed (linked) this launch: identify with the same id sends nothing. */
+    private var syncedUser: String? = null
+    /** The user id whose identify-user call is on its way. */
+    private var userInFlight: String? = null
+    /** A logout call on its way; a sign-in waits for it. */
+    private var logoutJob: Job? = null
+
     var state: AffiliateoState = AffiliateoState(
         refCode = null,
         isMatched = false,
@@ -113,6 +135,16 @@ object Affiliateo {
         // the whole point of persistence.
         val prefs = context.applicationContext.getSharedPreferences(OPT_OUT_PREFS, Context.MODE_PRIVATE)
         optedOut = prefs.getString(OPT_OUT_KEY, null) == "true"
+
+        // Who was signed in at the end of the last launch, and a sign-out the
+        // server never heard. An identify() or logout() made before configure()
+        // wins, except a sign-in while opted out, which does nothing.
+        if (userTouched && !(optedOut && userId != null)) {
+            saveUserState()
+        } else {
+            userId = AffiliateoUserId.usable(prefs.getString(USER_ID_KEY, null))
+            logoutPending = userId == null && prefs.getString(LOGOUT_PENDING_KEY, null) == "true"
+        }
 
         if (optedOut) {
             log("blocked: opted out (call optIn() to re-enable)")
@@ -317,33 +349,37 @@ object Affiliateo {
     }
 
     /**
-     * Wipe the device identity. Drains pending events first (they land
-     * server-side under the OLD device_id which is correct), then clears
-     * the queue, regenerates the device_id, and resets state. Call on
-     * app logout when a different user might sign in afterwards.
+     * The user signed out (4.11.0). Call it on sign-out: this device starts
+     * over as a new anonymous customer of the app, so whoever signs in next
+     * (or nobody) is not counted as the person who just left, and everything
+     * already recorded stays with them. Forgets the stored user id.
+     *
+     * Tracking carries on: same device id, same visitor id, same
+     * obfuscatedAccountId, nothing to restart. A sign-out made offline (or
+     * while opted out, or before configure()) is sent after the next
+     * launch's identify.
      */
     @JvmStatic
-    fun reset() {
-        val ctx = appContext ?: return
-        log("reset")
+    fun logout() {
+        log("logout requested")
+        userTouched = true
+        userId = null
+        logoutPending = true
+        saveUserState()
         scope?.launch {
-            queue?.flush()
-            queue?.clear()
-            // Clear the device_id cache so DeviceId.get() mints a fresh one
-            // (the SharedPreferences UUID fallback). The platform androidId
-            // is tied to the install and we can't change it; only the
-            // UUID fallback gets fresh entropy.
-            ctx.getSharedPreferences("affiliateo", Context.MODE_PRIVATE)
-                .edit().remove("device_id").apply()
-            deviceId = DeviceId.get(ctx)
-            state = AffiliateoState(
-                refCode = null,
-                isMatched = false,
-                isLoading = false,
-                visitorId = null,
-            )
+            syncedUser = null
+            sendLogout()
         }
     }
+
+    /**
+     * The same as [logout] since 4.11.0. It used to try to mint a new device
+     * id (ANDROID_ID cannot be changed) and cleared the state, which left
+     * obfuscatedAccountId null until the app restarted. Kept so existing apps
+     * keep compiling and now get the sign-out they meant.
+     */
+    @JvmStatic
+    fun reset() = logout()
 
     /**
      * Stop tracking on this device. Sets the persistent opt-out flag in
@@ -448,28 +484,151 @@ object Affiliateo {
     }
 
     /**
-     * Link this anonymous device install to a merchant user_id so the
-     * funnel can stitch the same person across devices, reinstalls,
-     * and the anonymous to logged-in handoff. Call once after sign-in.
-     * Idempotent: safe to call on every app launch when a user is
-     * signed in.
+     * Say who is signed in. Call after sign-in, and on launch while someone
+     * is signed in. The same person then counts as ONE customer across
+     * devices, reinstalls, and the anonymous to signed-in handoff. A
+     * different user signing in on this device switches it to them (since
+     * 4.11.0; it used to be refused).
+     *
+     * The SDK stores the id and re-sends it once per launch; called before
+     * configure(), it is kept and sent after configure's identify. A sign-in
+     * that raced ahead of the launch's first identify is sent again right
+     * after it. Does nothing while opted out, and skips ids that mean
+     * "nobody" ("null", "undefined", "guest", "0", RevenueCat's
+     * $RCAnonymousID:...).
      *
      * user_id only. the SDK does NOT accept, collect, or transmit
      * email or any other PII.
      */
     @JvmStatic
     fun identify(userId: String) {
-        if (optedOut) return
-        val cleanId = userId.trim()
-        if (cleanId.isEmpty() || cleanId.length > 128) return
-        val client = client ?: return
-        val deviceId = deviceId ?: return
-        val campaignId = campaignId ?: return
-        log("identify (user)", "user_id=$cleanId")
+        if (optedOut) {
+            log("identify skipped: opted out")
+            return
+        }
+        val uid = AffiliateoUserId.usable(userId)
+        if (uid == null) {
+            log("identify skipped: not a user id (empty, over 128 characters, or a placeholder like \"null\", \"guest\" or \"0\")", "user_id=$userId")
+            return
+        }
+        userTouched = true
+        this.userId = uid
+        // A sign-in replaces a sign-out that never reached the server: a
+        // different person signing in switches the device anyway.
+        logoutPending = false
+        saveUserState()
+        // Before configure(): sent once configure's identify has finished.
         scope?.launch {
+            // Already confirmed this launch: nothing to send.
+            if (syncedUser == uid) return@launch
+            sendIdentifyUser(uid)
+        }
+    }
+
+    /** Mirror the signed-in user and the pending sign-out to SharedPreferences. */
+    private fun saveUserState() {
+        val ctx = appContext ?: return
+        ctx.getSharedPreferences(OPT_OUT_PREFS, Context.MODE_PRIVATE).edit().apply {
+            val uid = userId
+            if (uid != null) putString(USER_ID_KEY, uid) else remove(USER_ID_KEY)
+            if (logoutPending) putString(LOGOUT_PENDING_KEY, "true") else remove(LOGOUT_PENDING_KEY)
+        }.apply()
+    }
+
+    /**
+     * POST /api/v1/mobile/identify-user for the signed-in user. A 400 is not
+     * retried (and the stored id is forgotten); a network or server error
+     * leaves it stored for the next launch; NotLinked is sent once more when
+     * this launch's first identify finished while it was on its way.
+     * Runs on the Main scope.
+     */
+    private suspend fun sendIdentifyUser(uid: String) {
+        // Already on its way: that call's answer decides what happens next.
+        if (userInFlight == uid) return
+        userInFlight = uid
+        try {
+            repeat(2) {
+                // A sign-out still on its way lands first, so it cannot undo this.
+                logoutJob?.join()
+                val client = client ?: return
+                val did = deviceId ?: return
+                val cid = campaignId ?: return
+                if (optedOut || userId != uid) return
+                val beforeFirstOpen = !firstOpenDone
+                val result = try {
+                    client.identifyUser(cid, did, uid)
+                } catch (_: Exception) {
+                    log("identify failed (network), sent again next launch", "user_id=$uid")
+                    return
+                }
+                // Signed out, or somebody else signed in, while this was in flight.
+                if (userId != uid) return
+                when (result) {
+                    is IdentifyUserResult.Linked -> {
+                        syncedUser = uid
+                        log("identify (user)", "user_id=$uid, outcome=${result.outcome}")
+                        return
+                    }
+                    IdentifyUserResult.Refused -> {
+                        log("identify refused by the server (400), not retried", "user_id=$uid")
+                        userId = null
+                        saveUserState()
+                        return
+                    }
+                    IdentifyUserResult.NotLinked -> {
+                        if (!(beforeFirstOpen && firstOpenDone)) {
+                            log("identify: device not known yet, sent again after the first identify", "user_id=$uid")
+                            return
+                        }
+                        log("identify: device known now, sending again", "user_id=$uid")
+                    }
+                }
+            }
+        } finally {
+            if (userInFlight == uid) userInFlight = null
+        }
+    }
+
+    /**
+     * POST /api/v1/mobile/logout. The pending flag is cleared only once the
+     * server has it; until then the next launch sends it again. Runs on the
+     * Main scope.
+     */
+    private suspend fun sendLogout() {
+        if (optedOut) return
+        val client = client ?: return
+        val did = deviceId ?: return
+        val cid = campaignId ?: return
+        val s = scope ?: return
+        val job = s.launch {
             try {
-                client.identifyUser(campaignId, deviceId, cleanId)
-            } catch (_: Exception) { }
+                val outcome = client.logout(cid, did)
+                log("logout", "outcome=$outcome")
+                // Nobody signed in meanwhile (a sign-in clears the flag itself).
+                if (userId == null) {
+                    logoutPending = false
+                    saveUserState()
+                }
+            } catch (_: Exception) {
+                log("logout failed (network), sent again next launch")
+            }
+        }
+        logoutJob = job
+        job.join()
+        if (logoutJob === job) logoutJob = null
+    }
+
+    /**
+     * After this launch's first identify: the stored user if the server has
+     * not confirmed it yet (which also covers a sign-in that answered
+     * NotLinked), or a sign-out it never heard. Runs on the Main scope.
+     */
+    private suspend fun syncSignedInUser() {
+        val uid = userId
+        if (uid != null) {
+            if (syncedUser != uid) sendIdentifyUser(uid)
+        } else if (logoutPending) {
+            sendLogout()
         }
     }
 
@@ -540,6 +699,11 @@ object Affiliateo {
                 obfuscatedAccountId = obfuscatedAccountId
             )
             log("identify success", "visitor=${result.visitorId}, matched=${result.matched}, ref=${result.refCode}")
+
+            // The server knows this device now: bring it up to date on who is
+            // signed in.
+            firstOpenDone = true
+            scope?.launch { syncSignedInUser() }
 
             // Auto-set RevenueCat subscriber attributes. The visitor id goes
             // on EVERY identify (matched or organic): the webhook stamps it

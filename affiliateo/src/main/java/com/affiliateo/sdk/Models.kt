@@ -44,11 +44,22 @@ data class AffiliateoState(
      * purchase and Affiliateo ties the sale (and every renewal and refund
      * after it) to this phone, and to the affiliate when there is one.
      *
-     * Null before identify succeeds (so also when the SDK starts opted out)
-     * and after reset().
+     * Null before identify succeeds (so also when the SDK starts opted out).
+     * Since 4.11.0 logout() and reset() keep it: the device and its visitor
+     * id stay the same, only who it counts as changes.
      */
     val obfuscatedAccountId: String? = null
 )
+
+/** What /api/v1/mobile/identify-user answered (4.11.0). */
+internal sealed class IdentifyUserResult {
+    /** The server has it. [outcome] is "same", "adopted", "merged" or "switched". */
+    data class Linked(val outcome: String?) : IdentifyUserResult()
+    /** The device is not known yet; send again after the first identify. */
+    object NotLinked : IdentifyUserResult()
+    /** A 400: not an id a sign-in gives. Not retried. */
+    object Refused : IdentifyUserResult()
+}
 
 /** What a purchase reported with `Affiliateo.purchase` bought. */
 enum class PurchaseKind(internal val wire: String) {

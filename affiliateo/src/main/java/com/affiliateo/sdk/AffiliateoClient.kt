@@ -96,19 +96,26 @@ internal class AffiliateoClient(private val apiUrl: String = "https://affiliateo
     }
 
     /**
-     * Link this anonymous device install to a merchant user_id. Required
-     * for cross-device funnel stitching: the same person on phone +
-     * tablet + reinstall all collapse to one funnel actor. user_id only.
-     * the SDK does NOT accept, collect, or transmit email or any other
-     * PII. Idempotent on the server side. Best-effort: a 4xx here means
-     * the visitor row hasn't been created yet (sign-in fired before first
-     * /identify) and the next session will retry.
+     * Tell Affiliateo who is signed in on this device. user_id only. the SDK
+     * does NOT accept, collect, or transmit email or any other PII.
+     *
+     * Since 4.11.0 the answer is read rather than ignored:
+     * - [IdentifyUserResult.Linked]: the server has it. The outcome says what
+     *   happened to the app's customer: "same", "adopted", "merged", or
+     *   "switched" (a different person signed in on this device).
+     * - [IdentifyUserResult.NotLinked]: the device is not known yet, because
+     *   the sign-in raced ahead of this launch's first identify. Sent again
+     *   once that call has finished.
+     * - [IdentifyUserResult.Refused]: a 400, the id is not one a sign-in
+     *   gives. Not retried.
+     * Anything else (offline, a 5xx, a rate limit) throws, and the next launch
+     * sends the stored id again.
      */
     suspend fun identifyUser(
         campaignId: String,
         deviceId: String,
         userId: String
-    ) = withContext(Dispatchers.IO) {
+    ): IdentifyUserResult = withContext(Dispatchers.IO) {
         val url = URL("${apiUrl.trimEnd('/')}/api/v1/mobile/identify-user")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
@@ -123,9 +130,55 @@ internal class AffiliateoClient(private val apiUrl: String = "https://affiliateo
 
         conn.outputStream.use { it.write(body.toString().toByteArray()) }
 
-        if (conn.responseCode != 200) {
-            throw AffiliateoException("Identify user failed: ${conn.responseCode}")
+        val code = conn.responseCode
+        if (code == 400) return@withContext IdentifyUserResult.Refused
+        if (code !in 200..299) {
+            throw AffiliateoException("Identify user failed: $code")
         }
+        val json = try {
+            JSONObject(conn.inputStream.bufferedReader().readText())
+        } catch (_: Exception) {
+            null
+        }
+        if (json != null && json.has("linked") && !json.optBoolean("linked", true)) {
+            IdentifyUserResult.NotLinked
+        } else {
+            IdentifyUserResult.Linked(
+                if (json == null || json.isNull("outcome")) null else json.optString("outcome").takeIf { it.isNotEmpty() }
+            )
+        }
+    }
+
+    /**
+     * The person signed out (4.11.0). POST /api/v1/mobile/logout: the device
+     * keeps its device id and visitor id, and from now on counts as a new
+     * anonymous customer of the app. Returns the server's outcome
+     * ("signed_out" or "already_anonymous"); throws when it did not land.
+     */
+    suspend fun logout(campaignId: String, deviceId: String): String? = withContext(Dispatchers.IO) {
+        val url = URL("${apiUrl.trimEnd('/')}/api/v1/mobile/logout")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.doOutput = true
+
+        val body = JSONObject().apply {
+            put("campaign_id", campaignId)
+            put("device_id", deviceId)
+        }
+
+        conn.outputStream.use { it.write(body.toString().toByteArray()) }
+
+        val code = conn.responseCode
+        if (code !in 200..299) {
+            throw AffiliateoException("Logout failed: $code")
+        }
+        val json = try {
+            JSONObject(conn.inputStream.bufferedReader().readText())
+        } catch (_: Exception) {
+            null
+        }
+        if (json == null || json.isNull("outcome")) null else json.optString("outcome").takeIf { it.isNotEmpty() }
     }
 
     /**
