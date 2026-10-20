@@ -10,6 +10,15 @@ plugins {
     id("maven-publish")
 }
 
+// 4.13.0: Google Play's own price for the app's products. Once a day, in the
+//         background, a phone whose Play Store country is the US reads the
+//         products Affiliateo asks about with the app's own Play Billing (the
+//         base plan's recurring price, never an offer's; one-time products
+//         too) and reports them, so the app's product cards on Affiliateo
+//         show the store's exact price without any Google Play key. Play
+//         Billing 8 is compileOnly: an app without it, or with an older one,
+//         reports nothing. Nothing about the person is sent, nothing to call,
+//         never blocks or throws, nothing while opted out.
 // 4.12.0: free access for apps that sell without RevenueCat (Google Play
 //         Billing, StoreKit, Adapty, Stripe). identify(userId, email) takes
 //         the signed-in person's email and sends only its SHA-256 (trimmed
@@ -52,7 +61,7 @@ plugins {
 // install (Meta / TikTok / Google Ads) gets its source labelled server-side
 // with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-version = "4.12.0"
+version = "4.13.0"
 
 android {
     namespace = "com.affiliateo.sdk"
@@ -112,6 +121,10 @@ dependencies {
     // Compose already have it on their classpath at runtime, so the
     // @Composable function resolves naturally.
     compileOnly("androidx.compose.runtime:runtime:1.5.4")
+    // Play Billing is the APP's (RevenueCat brings it): compileOnly, so the
+    // SDK adds no dependency and never forces a version. StorePrices checks
+    // at run time that the app's Billing has the shape built against (8.x).
+    compileOnly("com.android.billingclient:billing:8.3.0")
 
     // Unit tests (4.12.0): the email hash and the free access rules, on the
     // plain JVM. org.json is Android's own; the stub in android.jar throws

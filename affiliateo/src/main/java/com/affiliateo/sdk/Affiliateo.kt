@@ -846,10 +846,31 @@ object Affiliateo {
             // the feature silently dead with nothing to say why.
             reportRevenueCatAppUserId()
 
+            // Google Play's own price for the app's products, from a US
+            // phone, once a day, in the background (4.13.0). Never blocks.
+            reportStorePricesIfDue(context)
+
             signInSync?.join()
         } catch (_: Exception) {
             log("identify failed (network error)")
             state = state.copy(isLoading = false)
+        }
+    }
+
+    /** See [StorePrices]. Skipped while opted out; a failed check is tried again next launch. */
+    private fun reportStorePricesIfDue(context: Context) {
+        if (optedOut) return
+        val client = client ?: return
+        val deviceId = deviceId ?: return
+        val campaignId = campaignId ?: return
+        val prefs = context.getSharedPreferences(OPT_OUT_PREFS, Context.MODE_PRIVATE)
+        val key = StorePriceRules.checkedKey(campaignId)
+        val last = if (prefs.contains(key)) prefs.getLong(key, 0L) else null
+        if (!StorePriceRules.isDue(last, System.currentTimeMillis())) return
+        scope?.launch(Dispatchers.IO) {
+            if (StorePrices.report(context, client, campaignId, deviceId)) {
+                prefs.edit().putLong(key, System.currentTimeMillis()).apply()
+            }
         }
     }
 

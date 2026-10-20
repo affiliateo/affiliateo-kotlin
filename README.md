@@ -18,7 +18,7 @@ In your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.github.affiliateo:affiliateo-kotlin:4.12.0")
+    implementation("com.github.affiliateo:affiliateo-kotlin:4.13.0")
 }
 ```
 
@@ -226,6 +226,12 @@ transaction id. Affiliateo's own two ways are matched on it and go out once.
 - **Matches affiliate referrals** via fingerprint matching
 - **Sets RevenueCat attributes** automatically if RevenueCat is installed
 - **IAP attribution** via Play Billing `obfuscatedAccountId`, for every user (see Tag every purchase)
+- **Store prices** (4.13.0): once a day, in the background, a phone whose
+  Play Store country is the US reports Google Play's own price for the app's
+  products (with the app's own Play Billing 8, which RevenueCat brings), so
+  your product cards on Affiliateo show the exact price with no Google Play
+  key. Only the product ids, prices, currency and store country are sent;
+  nothing about the person. Nothing to call.
 
 ## Giving affiliates free access
 

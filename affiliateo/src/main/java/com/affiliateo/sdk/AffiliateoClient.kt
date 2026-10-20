@@ -218,6 +218,51 @@ internal class AffiliateoClient(private val apiUrl: String = "https://affiliateo
     }
 
     /**
+     * Which products this phone should price today (4.13.0). POST
+     * /api/v1/mobile/store-prices with no prices: the app's store product
+     * ids, and whether a report is due (the server takes one a day).
+     */
+    suspend fun storePriceProducts(campaignId: String, deviceId: String): StorePriceRequest {
+        val json = postStorePrices(JSONObject().apply {
+            put("campaign_id", campaignId)
+            put("device_id", deviceId)
+        })
+        val ids = json.optJSONArray("product_ids")
+        val list = buildList { if (ids != null) for (i in 0 until ids.length()) ids.optString(i).takeIf { it.isNotEmpty() }?.let(::add) }
+        return StorePriceRequest(list, json.optBoolean("report", false))
+    }
+
+    /** This phone's store prices for those products (4.13.0). */
+    suspend fun reportStorePrices(campaignId: String, deviceId: String, storefront: String, prices: List<StorePrice>) {
+        postStorePrices(JSONObject().apply {
+            put("campaign_id", campaignId)
+            put("device_id", deviceId)
+            put("storefront", storefront)
+            put("prices", JSONArray().apply {
+                for (p in prices) put(JSONObject().apply {
+                    put("product_id", p.productId)
+                    put("price_cents", p.priceCents)
+                    put("currency", p.currency)
+                })
+            })
+        })
+    }
+
+    private suspend fun postStorePrices(body: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+        val url = URL("${apiUrl.trimEnd('/')}/api/v1/mobile/store-prices")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.doOutput = true
+        conn.connectTimeout = 20_000
+        conn.readTimeout = 20_000
+        conn.outputStream.use { it.write(body.toString().toByteArray()) }
+        val code = conn.responseCode
+        if (code !in 200..299) throw AffiliateoException("Store prices failed: $code")
+        try { JSONObject(conn.inputStream.bufferedReader().readText()) } catch (_: Exception) { JSONObject() }
+    }
+
+    /**
      * Report the host app's RevenueCat App User ID
      * (`Purchases.sharedInstance.appUserID`).
      *
