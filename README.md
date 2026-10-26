@@ -18,7 +18,7 @@ In your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.github.affiliateo:affiliateo-kotlin:4.13.0")
+    implementation("com.github.affiliateo:affiliateo-kotlin:4.14.0")
 }
 ```
 
@@ -218,6 +218,44 @@ transaction id. Affiliateo's own two ways are matched on it and go out once.
 - **A measurement partner** (AppsFlyer, Adjust, Branch, Singular, Kochava) that
   forwards purchases to the network counts too: stop forwarding them, or leave
   **Send app sales** off for that network.
+
+## Live Chat (4.14.0)
+
+Let the people using your app chat with you in real time. You answer from the
+**Live Chat** inbox in your Affiliateo dashboard: add Live Chat from the App
+Store there, then switch it on for this app under its settings (the gear).
+
+```kotlin
+// The chat bubble on every screen (after configure)
+Affiliateo.showChatBubble()
+
+// Or open the chat from your own button
+button.setOnClickListener { Affiliateo.openChat(this) }
+
+// Show your own button only while the chat is on (suspend)
+val available = Affiliateo.chatAvailable()
+
+// Take the bubble away again
+Affiliateo.hideChatBubble()
+```
+
+- Nothing shows until your code calls `showChatBubble()` or `openChat()`, so
+  the store reviewer sees every feature your app has. Nothing shows either
+  while Live Chat is off for this app in your dashboard.
+- The bubble sits on top of each screen's content, Compose or Views (a
+  dialog you open covers it). People can drag it and it stays where they
+  leave it. It shows a red number for replies they have not read, and a green
+  dot while someone on your team is online. If you chose "only while someone
+  is online", it hides while nobody is.
+- The chat screen is Affiliateo's hosted chat page, full screen and in the
+  person's language, declared in the SDK's own manifest: nothing to add to
+  yours. Back closes it, and links you send open in the browser.
+- The person needs no account. Their first message opens a thread, and the
+  key to it is kept on the phone. Your inbox labels the thread with the
+  device, the Affiliateo visitor and, after `identify()`, your user id; none
+  of them while the person has opted out.
+- Google Play Data safety: chat messages are **Messages, Other in-app
+  messages**.
 
 ## What it does
 

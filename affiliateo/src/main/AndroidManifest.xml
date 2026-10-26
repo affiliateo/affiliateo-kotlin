@@ -1,3 +1,17 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <application>
+        <!--
+          Live Chat's screen (4.14.0, ChatActivity.kt). It keeps itself through
+          turns, keyboards and dark mode switches instead of starting over,
+          and makes room for the keyboard. Only the SDK opens it.
+        -->
+        <activity
+            android:name="com.affiliateo.sdk.ChatActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density"
+            android:windowSoftInputMode="adjustResize" />
+    </application>
 </manifest>

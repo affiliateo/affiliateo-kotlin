@@ -174,6 +174,10 @@ object Affiliateo {
             logoutPending = userId == null && prefs.getString(LOGOUT_PENDING_KEY, null) == "true"
         }
 
+        // Live Chat (4.14.0) follows the screens itself, opted out or not: the
+        // chat still works while opted out, it only leaves the ids out.
+        (context.applicationContext as? Application)?.let { LiveChat.install(it) }
+
         if (optedOut) {
             log("blocked: opted out (call optIn() to re-enable)")
             // Opted-out path: skip identify + foreground ping entirely.
@@ -460,6 +464,59 @@ object Affiliateo {
         log("flush requested")
         queue?.flush()
     }
+
+    // ── Live Chat (4.14.0) ───────────────────────────────────────────────
+
+    /**
+     * Show the Live Chat bubble on every screen (4.14.0). People tap it to
+     * chat with you in real time; you answer from the Live Chat inbox in your
+     * Affiliateo dashboard. It shows only while Live Chat is switched on for
+     * this app there, and remembers where the person dragged it.
+     *
+     * ```kotlin
+     * Affiliateo.configure(context = this, appId = "YOUR_APP_ID")
+     * Affiliateo.showChatBubble()
+     * ```
+     *
+     * Nothing shows until the app calls this or [openChat], so the store
+     * reviewer sees every feature the app has. Safe from any thread.
+     */
+    fun showChatBubble() = LiveChat.showBubble()
+
+    /** Take the chat bubble away again (4.14.0). */
+    fun hideChatBubble() = LiveChat.hideBubble()
+
+    /**
+     * Open the chat from your own button (4.14.0), full screen over [activity].
+     * Does nothing while Live Chat is off for this app (with debug = true it
+     * says so in Logcat).
+     *
+     * ```kotlin
+     * button.setOnClickListener { Affiliateo.openChat(this) }
+     * ```
+     */
+    fun openChat(activity: Activity) = LiveChat.open(activity)
+
+    /** Whether Live Chat is on for this app right now (4.14.0), to show or hide your own "Chat with us" button. Never throws: no answer is false. */
+    suspend fun chatAvailable(): Boolean = LiveChat.available()
+
+    /** What Live Chat (Chat.kt) needs to know about this install; null before configure(). */
+    internal fun chatEnv(): ChatRules.Env? {
+        val app = campaignId ?: return null
+        return ChatRules.Env(
+            appId = app,
+            apiUrl = apiUrl,
+            deviceId = deviceId,
+            visitorId = state.visitorId,
+            userId = userId,
+            optedOut = optedOut,
+            debug = debug,
+        )
+    }
+
+    internal fun chatContext(): Context? = appContext
+
+    internal fun chatLog(msg: String) = log("chat: $msg")
 
     /**
      * Internal debug logger. No-op unless debug=true was passed to configure().

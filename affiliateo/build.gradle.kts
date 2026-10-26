@@ -10,6 +10,18 @@ plugins {
     id("maven-publish")
 }
 
+// 4.14.0: Live Chat. Affiliateo.showChatBubble() draws a draggable chat
+//         bubble over the app's screens and Affiliateo.openChat(activity)
+//         opens the chat from the app's own button; the business answers
+//         from the Live Chat inbox in its dashboard. The chat screen is
+//         Affiliateo's hosted chat page in a WebView (ChatActivity, declared
+//         in this library's manifest). Nothing shows until the app calls one
+//         of them, nor while the business has the chat off for the app. The
+//         bubble shows unread replies and whether the team is online;
+//         chatAvailable() answers whether the chat is on, hideChatBubble()
+//         takes the bubble away. Also: a shrunk release build of an app
+//         without Play Billing no longer stops on "Missing class
+//         com.android.billingclient" (consumer-rules.pro, a 4.13.0 slip).
 // 4.13.0: Google Play's own price for the app's products. Once a day, in the
 //         background, a phone whose Play Store country is the US reads the
 //         products Affiliateo asks about with the app's own Play Billing (the
@@ -61,7 +73,7 @@ plugins {
 // install (Meta / TikTok / Google Ads) gets its source labelled server-side
 // with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-version = "4.13.0"
+version = "4.14.0"
 
 android {
     namespace = "com.affiliateo.sdk"

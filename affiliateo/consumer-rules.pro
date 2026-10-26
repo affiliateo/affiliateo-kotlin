@@ -31,3 +31,18 @@
 }
 -dontwarn com.google.android.gms.ads.identifier.**
 -dontwarn com.facebook.appevents.**
+
+# Play Billing is the app's, compileOnly here (StorePrices.kt, 4.13.0), and
+# StorePrices checks at run time that it is there. An app that sells nothing
+# through Google Play has no Billing at all, and without this line its shrunk
+# release build stopped with "Missing class com.android.billingclient...".
+-dontwarn com.android.billingclient.**
+
+# Live Chat (4.14.0, ChatActivity.kt): the chat page calls
+# window.AffiliateoChatBridge.postMessage(json) by name. A shrunk release
+# build that renamed the method would leave the page talking to nothing: the
+# token of a new thread would never be kept and the close button would not
+# close.
+-keepclassmembers class com.affiliateo.sdk.ChatActivity$Bridge {
+    @android.webkit.JavascriptInterface <methods>;
+}
