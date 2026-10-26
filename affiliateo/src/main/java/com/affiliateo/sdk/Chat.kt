@@ -32,8 +32,11 @@ import android.widget.TextView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -54,6 +57,14 @@ import java.util.Locale
  * business has the chat switched off for this app, which the SDK asks the
  * server about.
  *
+ * The owner's choices come with the config (ChatRules.Bubble): the corner the
+ * bubble starts in, its size, the screens it shows on (matched against the
+ * name the app last passed to Affiliateo.page()), and a greeting that counts
+ * as one unread message until the chat is first opened. While the bubble is
+ * on screen and the chat closed, the red number is asked for every
+ * UNREAD_POLL_MS (Android has no WebSocket of its own, and the SDK adds no
+ * library for one).
+ *
  * The bubble is a view the SDK adds on top of each screen's content
  * (android.R.id.content) as it comes up, so a dialog or a new screen the app
  * opens covers it. The visitor's key to their thread (a token the server
@@ -65,6 +76,8 @@ internal object LiveChat {
     private const val BUBBLE_TAG = "affiliateo_chat_bubble"
     /** The SDK's one SharedPreferences file (Affiliateo.kt OPT_OUT_PREFS). */
     private const val PREFS = "affiliateo"
+    /** How often the red number is asked for while the bubble is on screen. */
+    private const val UNREAD_POLL_MS = 20_000L
 
     private val main = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -79,8 +92,13 @@ internal object LiveChat {
     private var configJob: Deferred<ChatRules.Config>? = null
     private var unreadCheckedAt = 0L
     private var unread = 0
+    /** The greeting nobody on this phone has seen yet: one unread message. */
+    private var greetingPending = false
+    /** The name the app last passed to page(). */
+    private var currentScreen: String? = null
     private var wantsBubble = false
     private var screenOpen = false
+    private var poll: Job? = null
 
     private val env: ChatRules.Env? get() = Affiliateo.chatEnv()
 
@@ -105,6 +123,7 @@ internal object LiveChat {
 
             override fun onActivityStopped(activity: Activity) {
                 startedCount--
+                if (startedCount == 0) stopPolling()
             }
 
             override fun onActivityResumed(activity: Activity) {
@@ -158,6 +177,13 @@ internal object LiveChat {
         if (env == null) false else refreshConfig(force = false).enabled
     }
 
+    /** The app called page(): the owner's screen rules follow it. */
+    fun screenChanged(name: String) = onMain {
+        if (name.isEmpty() || name == currentScreen) return@onMain
+        currentScreen = name
+        if (wantsBubble && config != null) placeBubble()
+    }
+
     // ── The server ────────────────────────────────────────────────────────
 
     /** Whether the business has the chat on for this app. A network failure keeps the last answer; anything but a 200 reads as off. */
@@ -195,6 +221,11 @@ internal object LiveChat {
         }
         config = answer
         configCheckedAt = System.currentTimeMillis()
+        // Somebody who already wrote has seen the greeting.
+        val ctx = Affiliateo.chatContext()
+        val greetingId = answer.bubble.greetingId
+        greetingPending = answer.enabled && greetingId != null && ctx != null &&
+            storedToken(ctx, e.appId) == null && prefs(ctx).getString(ChatRules.greetingKey(e.appId), null) != greetingId
         return answer
     }
 
@@ -237,10 +268,36 @@ internal object LiveChat {
 
     fun setUnread(count: Int) = onMain {
         unread = count
-        bubbleIn(resumed?.get())?.update(unread, config?.online == true)
+        paintBubble()
     }
 
-    // ── Token and position, in the SDK's SharedPreferences ───────────────
+    private fun paintBubble() {
+        bubbleIn(resumed?.get())?.update(unread + if (greetingPending) 1 else 0, config?.online == true)
+    }
+
+    // ── The live red number ───────────────────────────────────────────────
+
+    /** Asks for the red number every UNREAD_POLL_MS while the bubble is on screen, the app is in front and the chat is closed. */
+    private fun startPolling() {
+        if (poll?.isActive == true) return
+        val ctx = Affiliateo.chatContext() ?: return
+        val e = env ?: return
+        if (storedToken(ctx, e.appId) == null) return
+        poll = scope.launch {
+            while (isActive) {
+                delay(UNREAD_POLL_MS)
+                if (startedCount == 0 || screenOpen) break
+                refreshUnread(force = true)
+            }
+        }
+    }
+
+    private fun stopPolling() {
+        poll?.cancel()
+        poll = null
+    }
+
+    // ── Token, greeting and position, in the SDK's SharedPreferences ─────
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -272,24 +329,33 @@ internal object LiveChat {
     private fun bubbleIn(activity: Activity?): ChatBubbleView? =
         activity?.findViewById<ViewGroup>(android.R.id.content)?.findViewWithTag(BUBBLE_TAG)
 
-    /** Puts the bubble on the screen in front, or takes it off, to match what the app asked and what the server said. */
+    /** Puts the bubble on the screen in front, or takes it off, to match what the app asked, what the server said and which screen this is. */
     private fun placeBubble() {
         val activity = resumed?.get() ?: return
         if (activity is ChatActivity || activity.isFinishing) return
         val content = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
-        val existing = content.findViewWithTag<ChatBubbleView>(BUBBLE_TAG)
+        var existing = content.findViewWithTag<ChatBubbleView>(BUBBLE_TAG)
         val cfg = config
         val e = env
-        if (!wantsBubble || screenOpen || e == null || cfg == null || !cfg.enabled || !cfg.showBubble) {
+        val style = cfg?.bubble ?: ChatRules.Bubble.STANDARD
+        if (!wantsBubble || screenOpen || e == null || cfg == null || !cfg.enabled || !cfg.showBubble ||
+            !ChatRules.bubbleShowsOn(style.pageMode, style.pageRules, currentScreen)
+        ) {
             existing?.let { content.removeView(it) }
+            stopPolling()
             return
         }
-        val bubble = existing ?: ChatBubbleView(activity, e.appId) { open(activity) }.also {
+        if (existing != null && (existing.sizeDp != style.size || existing.position != style.position)) {
+            content.removeView(existing)
+            existing = null
+        }
+        val bubble = existing ?: ChatBubbleView(activity, e.appId, style.size, style.position) { open(activity) }.also {
             it.tag = BUBBLE_TAG
-            content.addView(it, FrameLayout.LayoutParams(it.boxPx, it.boxPx, Gravity.BOTTOM or Gravity.END))
+            content.addView(it)
         }
         bubble.bringToFront()
-        bubble.update(unread, cfg.online)
+        paintBubble()
+        startPolling()
     }
 
     // ── The chat screen ───────────────────────────────────────────────────
@@ -305,6 +371,9 @@ internal object LiveChat {
             language = Locale.getDefault().toLanguageTag(),
             theme = if (dark) "dark" else "light",
         )
+        // They see the greeting now; a new one counts again.
+        config?.bubble?.greetingId?.let { prefs(activity).edit().putString(ChatRules.greetingKey(e.appId), it).apply() }
+        greetingPending = false
         screenOpen = true
         placeBubble()
         val intent = Intent(activity, ChatActivity::class.java)
@@ -331,28 +400,37 @@ internal object LiveChat {
 }
 
 /**
- * The floating chat bubble. Press, hold and move to drag it; it remembers
- * where it was left. The view is 4 dp bigger than the 56 dp circle on each
- * side so the red number and the green dot fit inside it.
+ * The floating chat bubble. It starts in the owner's corner; press, hold and
+ * move to drag it, and it stays where it was left from then on. The view is
+ * 4 dp bigger than the circle on each side so the red number and the green
+ * dot fit inside it.
  */
 @SuppressLint("ViewConstructor")
 internal class ChatBubbleView(
     context: Context,
     private val appId: String,
+    /** The circle, in dp. */
+    val sizeDp: Int,
+    /** The owner's corner: bottom-right, bottom-left, top-right or top-left. */
+    val position: String,
     private val onTap: () -> Unit,
 ) : FrameLayout(context) {
     private val density = context.resources.displayMetrics.density
     private fun dp(value: Float) = (value * density).toInt()
 
-    private val circlePx = dp(56f)
+    private val circlePx = dp(sizeDp.toFloat())
     private val padPx = dp(4f)
-    val boxPx = circlePx + 2 * padPx
+    private val boxPx = circlePx + 2 * padPx
 
     private val pill = TextView(context)
     private val dot = View(context)
 
-    /** Distance of the circle from the content's right and bottom edges, in dp, system bars included. Null until laid out. */
-    private var offsetDp: Pair<Float, Float>? = null
+    /**
+     * Distance of the circle from the content's right and bottom edges, in dp,
+     * system bars included, once the person has dragged it (now or on an
+     * earlier launch). Until then the bubble follows the owner's corner.
+     */
+    private var dragged: Pair<Float, Float>? = LiveChat.savedOffset(context, appId)
     private var downX = 0f
     private var downY = 0f
     private var startOffset = Pair(0f, 0f)
@@ -360,6 +438,7 @@ internal class ChatBubbleView(
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
 
     init {
+        layoutParams = LayoutParams(boxPx, boxPx, Gravity.BOTTOM or Gravity.END)
         clipChildren = false
         clipToPadding = false
         isClickable = true
@@ -436,23 +515,40 @@ internal class ChatBubbleView(
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         requestApplyInsets()
+        post { place() }
     }
 
-    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        super.onLayout(changed, left, top, right, bottom)
-        if (offsetDp == null) post { move(LiveChat.savedOffset(context, appId) ?: defaultOffset()) }
+    /** In the owner's corner, or where the person left it. */
+    private fun place() {
+        val spot = dragged
+        if (spot != null) {
+            move(spot)
+            return
+        }
+        val params = layoutParams as? LayoutParams ?: return
+        val (bottom, right, top, left) = barOverlap()
+        val margin = dp(20f) - padPx
+        val isTop = position.startsWith("top")
+        val isLeft = position.endsWith("left")
+        params.gravity = (if (isTop) Gravity.TOP else Gravity.BOTTOM) or (if (isLeft) Gravity.START else Gravity.END)
+        params.topMargin = if (isTop) margin + top else 0
+        params.bottomMargin = if (isTop) 0 else margin + bottom
+        params.leftMargin = if (isLeft) margin + left else 0
+        params.rightMargin = if (isLeft) 0 else margin + right
+        layoutParams = params
     }
 
-    /** How much of the system bars covers the content's bottom, right and top edges, in px. */
+    /** How much of the system bars covers the content's bottom, right, top and left edges, in px. */
     private fun barOverlap(): IntArray {
-        val parent = parent as? View ?: return intArrayOf(0, 0, 0)
-        val insets = parent.rootWindowInsets ?: return intArrayOf(0, 0, 0)
+        val parent = parent as? View ?: return intArrayOf(0, 0, 0, 0)
+        val insets = parent.rootWindowInsets ?: return intArrayOf(0, 0, 0, 0)
         val bottom: Int
         val right: Int
         val top: Int
+        val left: Int
         if (Build.VERSION.SDK_INT >= 30) {
             val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-            bottom = bars.bottom; right = bars.right; top = bars.top
+            bottom = bars.bottom; right = bars.right; top = bars.top; left = bars.left
         } else {
             @Suppress("DEPRECATION")
             bottom = insets.systemWindowInsetBottom
@@ -460,6 +556,8 @@ internal class ChatBubbleView(
             right = insets.systemWindowInsetRight
             @Suppress("DEPRECATION")
             top = insets.systemWindowInsetTop
+            @Suppress("DEPRECATION")
+            left = insets.systemWindowInsetLeft
         }
         // A content view that already sits inside the bars needs no extra room.
         val loc = IntArray(2)
@@ -471,30 +569,35 @@ internal class ChatBubbleView(
             (bottom - belowContent).coerceAtLeast(0),
             (right - rightOfContent).coerceAtLeast(0),
             (top - loc[1]).coerceAtLeast(0),
+            (left - loc[0]).coerceAtLeast(0),
         )
     }
 
-    private fun defaultOffset(): Pair<Float, Float> {
-        val (bottom, right) = barOverlap()
-        return Pair(20f + right / density, 20f + bottom / density)
+    /** Where the circle is now, as dp from the content's right and bottom edges. */
+    private fun currentOffset(): Pair<Float, Float> {
+        val parent = parent as? View ?: return Pair(20f, 20f)
+        return Pair((parent.width - right + padPx) / density, (parent.height - bottom + padPx) / density)
     }
 
     private fun clamp(point: Pair<Float, Float>): Pair<Float, Float> {
         val parent = parent as? View ?: return point
-        val (bottom, right, top) = barOverlap()
+        val (bottom, right, top, left) = barOverlap()
         val width = parent.width / density
         val height = parent.height / density
         val minX = right / density + 8f
         val minY = bottom / density + 8f
-        val maxX = (width - 56f - 8f).coerceAtLeast(minX)
-        val maxY = (height - 56f - top / density - 8f).coerceAtLeast(minY)
+        val maxX = (width - sizeDp - left / density - 8f).coerceAtLeast(minX)
+        val maxY = (height - sizeDp - top / density - 8f).coerceAtLeast(minY)
         return Pair(point.first.coerceIn(minX, maxX), point.second.coerceIn(minY, maxY))
     }
 
+    /** To a spot given as dp from the right and bottom edges. */
     private fun move(point: Pair<Float, Float>) {
         val next = clamp(point)
-        offsetDp = next
-        val params = layoutParams as? MarginLayoutParams ?: return
+        val params = layoutParams as? LayoutParams ?: return
+        params.gravity = Gravity.BOTTOM or Gravity.END
+        params.topMargin = 0
+        params.leftMargin = 0
         params.rightMargin = (next.first * density).toInt() - padPx
         params.bottomMargin = (next.second * density).toInt() - padPx
         layoutParams = params
@@ -506,7 +609,7 @@ internal class ChatBubbleView(
             MotionEvent.ACTION_DOWN -> {
                 downX = event.rawX
                 downY = event.rawY
-                startOffset = offsetDp ?: defaultOffset()
+                startOffset = dragged ?: currentOffset()
                 dragging = false
                 return true
             }
@@ -515,12 +618,14 @@ internal class ChatBubbleView(
                 val dy = event.rawY - downY
                 if (!dragging && Math.abs(dx) + Math.abs(dy) < slop) return true
                 dragging = true
-                move(Pair(startOffset.first - dx / density, startOffset.second - dy / density))
+                val next = clamp(Pair(startOffset.first - dx / density, startOffset.second - dy / density))
+                dragged = next
+                move(next)
                 return true
             }
             MotionEvent.ACTION_UP -> {
                 if (dragging) {
-                    offsetDp?.let { LiveChat.saveOffset(context, appId, it.first, it.second) }
+                    dragged?.let { LiveChat.saveOffset(context, appId, it.first, it.second) }
                 } else {
                     performClick()
                 }

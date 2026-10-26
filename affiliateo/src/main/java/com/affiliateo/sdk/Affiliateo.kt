@@ -247,6 +247,8 @@ object Affiliateo {
     @JvmStatic
     @JvmOverloads
     fun page(screenName: String, metadata: Map<String, Any>? = null) {
+        // Live Chat's screen rules follow the screen, opted out or not (4.14.0).
+        LiveChat.screenChanged(screenName)
         if (optedOut) return
         log("page", "screen=$screenName, metadata=$metadata")
         enqueueEvent(mapOf<String, Any?>(

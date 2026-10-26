@@ -117,4 +117,59 @@ class ChatRulesTest {
         assertNull(ChatRules.parseHostMessage("""{"type":"something-else"}"""))
         assertNull(ChatRules.parseHostMessage("42"))
     }
+
+    // The website's bubble-options.test.ts cases: a bubble must show on the
+    // same pages and screens everywhere.
+    @Test
+    fun pageRules() {
+        val cases = listOf(
+            Triple("/pricing", "/pricing", true),
+            Triple("/pricing", "/Pricing/", true),
+            Triple("/pricing", "/pricing/plans", false),
+            Triple("/blog/*", "/blog/my-post", true),
+            Triple("/blog/*", "/blog/", true),
+            Triple("/blog/*", "/blog", true),
+            Triple("/blog/*", "/blogger", false),
+            Triple("/*", "/", true),
+            Triple("/blog*", "/blog", true),
+            Triple("*/checkout", "/shop/checkout", true),
+            Triple("/", "/", true),
+            Triple("/", "/about", false),
+            Triple("Settings", "settings", true),
+            Triple("Paywall*", "PaywallAnnual", true),
+            Triple("Paywall*", "Home", false),
+            Triple("/a.b", "/axb", false),
+            Triple("/(x)", "/(x)", true),
+            Triple("", "/", false),
+            Triple("   ", "/", false),
+        )
+        for ((rule, place, expected) in cases) {
+            assertEquals("$rule against $place", expected, ChatRules.pageRuleMatches(rule, place))
+        }
+    }
+
+    @Test
+    fun bubbleShowsOn() {
+        val rules = listOf("/checkout*", "Paywall*")
+        assertTrue(ChatRules.bubbleShowsOn("all", rules, "/checkout"))
+        assertTrue(ChatRules.bubbleShowsOn("all", emptyList(), null))
+        assertTrue(ChatRules.bubbleShowsOn("only", rules, "/checkout/step-2"))
+        assertFalse(ChatRules.bubbleShowsOn("only", rules, "/home"))
+        assertFalse(ChatRules.bubbleShowsOn("only", rules, null))
+        assertFalse(ChatRules.bubbleShowsOn("except", rules, "PaywallYearly"))
+        assertTrue(ChatRules.bubbleShowsOn("except", rules, "Home"))
+        assertTrue(ChatRules.bubbleShowsOn("except", rules, null))
+    }
+
+    @Test
+    fun bubbleConfig() {
+        val config = ChatRules.parseConfig(
+            """{"enabled":true,"show_bubble":true,"online":false,"bubble":{"position":"top-left","size":"large","size_points":64,"page_mode":"except","page_rules":["Paywall*",3],"greeting_id":"e40c292c"}}""",
+        )
+        assertEquals(ChatRules.Bubble("top-left", 64, "except", listOf("Paywall*"), "e40c292c"), config.bubble)
+        // An older server, or odd values: the old fixed bubble.
+        val plain = ChatRules.parseConfig("""{"enabled":true,"show_bubble":true,"bubble":{"position":"middle","size_points":500,"page_mode":"x","greeting_id":null}}""")
+        assertEquals(ChatRules.Bubble.STANDARD, plain.bubble)
+        assertEquals(ChatRules.Bubble.STANDARD, ChatRules.parseConfig("""{"enabled":true}""").bubble)
+    }
 }

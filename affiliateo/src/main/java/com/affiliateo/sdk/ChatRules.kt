@@ -40,9 +40,29 @@ internal object ChatRules {
         val showBubble: Boolean,
         /** Someone on the business's team is online right now. */
         val online: Boolean,
+        /** The owner's corner, size and screens for the bubble. */
+        val bubble: Bubble = Bubble.STANDARD,
     ) {
         companion object {
             val OFF = Config(enabled = false, showBubble = false, online = false)
+        }
+    }
+
+    /** The owner's say over the bubble (the website's lib/live-chat/bubble-options.ts; KEEP IN STEP). */
+    data class Bubble(
+        /** bottom-right, bottom-left, top-right or top-left. */
+        val position: String = "bottom-right",
+        /** The circle, in dp: 48, 56 or 64. */
+        val size: Int = 56,
+        /** all, only or except. */
+        val pageMode: String = "all",
+        /** Screen names, * matching anything. */
+        val pageRules: List<String> = emptyList(),
+        /** Set when the greeting counts as one unread message until the chat is first opened; a new greeting has a new id. */
+        val greetingId: String? = null,
+    ) {
+        companion object {
+            val STANDARD = Bubble()
         }
     }
 
@@ -62,6 +82,7 @@ internal object ChatRules {
 
     fun tokenKey(appId: String) = "affiliateo_chat_token_$appId"
     fun positionKey(appId: String) = "affiliateo_chat_pos_$appId"
+    fun greetingKey(appId: String) = "affiliateo_chat_greeting_seen_$appId"
 
     // ── The token ─────────────────────────────────────────────────────────
 
@@ -83,7 +104,51 @@ internal object ChatRules {
             enabled = true,
             showBubble = json.optBoolean("show_bubble", false),
             online = json.optBoolean("online", false),
+            bubble = parseBubble(json.optJSONObject("bubble")),
         )
+    }
+
+    /** The config's bubble, anything missing or odd read as the old fixed bubble. */
+    fun parseBubble(b: JSONObject?): Bubble {
+        if (b == null) return Bubble.STANDARD
+        val position = b.optString("position").takeIf { it in setOf("bottom-left", "top-right", "top-left") } ?: "bottom-right"
+        val size = b.optInt("size_points", 56).takeIf { it in 40..80 } ?: 56
+        val mode = b.optString("page_mode").takeIf { it == "only" || it == "except" } ?: "all"
+        val rules = mutableListOf<String>()
+        b.optJSONArray("page_rules")?.let { array ->
+            for (i in 0 until array.length()) (array.opt(i) as? String)?.let { rules.add(it) }
+        }
+        val greetingId = if (b.isNull("greeting_id")) null else b.optString("greeting_id").takeIf { it.isNotEmpty() }
+        return Bubble(position, size, mode, rules, greetingId)
+    }
+
+    // ── Which screens ─────────────────────────────────────────────────────
+
+    /** A name compared without case and without a trailing slash ("/" stays). */
+    private fun comparable(value: String): String {
+        val v = value.trim().lowercase()
+        return if (v.length > 1 && v.endsWith("/")) v.dropLast(1) else v
+    }
+
+    /**
+     * Whether one rule matches the current screen (the name the app last
+     * passed to page()). * matches any run of characters; a rule ending in
+     * slash-star ("/blog/" then a star) also matches the part in front of it.
+     */
+    fun pageRuleMatches(rule: String, place: String): Boolean {
+        val r = comparable(rule)
+        if (r.isEmpty()) return false
+        val p = comparable(place)
+        if (r.endsWith("/*") && comparable(r.dropLast(2).ifEmpty { "/" }) == p) return true
+        val pattern = r.split("*").joinToString(".*") { Regex.escape(it) }
+        return Regex("^$pattern$", RegexOption.DOT_MATCHES_ALL).matches(p)
+    }
+
+    /** Whether the bubble shows on this screen. An unknown screen (null) shows nothing under "only" and the bubble under "except". */
+    fun bubbleShowsOn(mode: String, rules: List<String>, place: String?): Boolean {
+        if (mode != "only" && mode != "except") return true
+        val hit = place != null && rules.any { pageRuleMatches(it, place) }
+        return if (mode == "only") hit else !hit
     }
 
     fun parseUnread(text: String): Int? {

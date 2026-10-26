@@ -19,7 +19,11 @@ plugins {
 //         of them, nor while the business has the chat off for the app. The
 //         bubble shows unread replies and whether the team is online;
 //         chatAvailable() answers whether the chat is on, hideChatBubble()
-//         takes the bubble away. Also: a shrunk release build of an app
+//         takes the bubble away. The owner picks, per app in the dashboard,
+//         the corner it starts in, its size, a greeting that counts as one
+//         unread message until the chat is first opened, and the screens it
+//         shows on (matched against the names sent with page()). The red
+//         number is asked for every 20 s while the bubble is on screen. Also: a shrunk release build of an app
 //         without Play Billing no longer stops on "Missing class
 //         com.android.billingclient" (consumer-rules.pro, a 4.13.0 slip).
 // 4.13.0: Google Play's own price for the app's products. Once a day, in the
