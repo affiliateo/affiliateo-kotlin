@@ -10,6 +10,8 @@ plugins {
     id("maven-publish")
 }
 
+// 4.14.2: Live Chat's bubble draws its speech bubble at 60% of the circle
+//         (it was half), as the website's bubble now does.
 // 4.14.1: Live Chat's "auto" bubble size: small on a phone, medium on a
 //         tablet (smallest width 600 dp and up), the size a new app starts
 //         with. The red number and the green dot now scale with the bubble,
@@ -81,7 +83,7 @@ plugins {
 // install (Meta / TikTok / Google Ads) gets its source labelled server-side
 // with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-version = "4.14.1"
+version = "4.14.2"
 
 android {
     namespace = "com.affiliateo.sdk"
