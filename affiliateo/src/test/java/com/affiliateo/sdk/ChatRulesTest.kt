@@ -172,4 +172,17 @@ class ChatRulesTest {
         assertEquals(ChatRules.Bubble.STANDARD, plain.bubble)
         assertEquals(ChatRules.Bubble.STANDARD, ChatRules.parseConfig("""{"enabled":true}""").bubble)
     }
+
+    @Test
+    fun sizesAndBadges() {
+        val auto = ChatRules.parseConfig("""{"enabled":true,"bubble":{"size":"auto","size_points":56,"size_points_phone":48}}""").bubble
+        assertEquals(56, auto.size)
+        assertEquals(48, auto.sizePhone)
+        // A server from before the phone size: both are size_points.
+        assertEquals(64, ChatRules.parseConfig("""{"enabled":true,"bubble":{"size":"large","size_points":64}}""").bubble.sizePhone)
+        // The website's pinned numbers (bubble-options.test.ts).
+        assertEquals(ChatRules.BadgeMetrics(20f, 11f, 5f, 4f, 16f, 2f, 2f), ChatRules.badgeMetrics(56))
+        assertEquals(ChatRules.BadgeMetrics(17f, 9.5f, 4f, 3f, 14f, 2f, 1.5f), ChatRules.badgeMetrics(48))
+        assertEquals(ChatRules.BadgeMetrics(23f, 12.5f, 6f, 5f, 18f, 2f, 2f), ChatRules.badgeMetrics(64))
+    }
 }

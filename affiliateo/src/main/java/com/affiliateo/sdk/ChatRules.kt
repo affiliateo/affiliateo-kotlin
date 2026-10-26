@@ -52,7 +52,7 @@ internal object ChatRules {
     data class Bubble(
         /** bottom-right, bottom-left, top-right or top-left. */
         val position: String = "bottom-right",
-        /** The circle, in dp: 48, 56 or 64. */
+        /** The circle on a tablet, in dp: 48, 56 or 64. */
         val size: Int = 56,
         /** all, only or except. */
         val pageMode: String = "all",
@@ -60,6 +60,8 @@ internal object ChatRules {
         val pageRules: List<String> = emptyList(),
         /** Set when the greeting counts as one unread message until the chat is first opened; a new greeting has a new id. */
         val greetingId: String? = null,
+        /** The circle on a phone (smaller than size for the owner's "auto"). */
+        val sizePhone: Int = size,
     ) {
         companion object {
             val STANDARD = Bubble()
@@ -119,7 +121,33 @@ internal object ChatRules {
             for (i in 0 until array.length()) (array.opt(i) as? String)?.let { rules.add(it) }
         }
         val greetingId = if (b.isNull("greeting_id")) null else b.optString("greeting_id").takeIf { it.isNotEmpty() }
-        return Bubble(position, size, mode, rules, greetingId)
+        val phone = b.optInt("size_points_phone", size).takeIf { it in 40..80 } ?: size
+        return Bubble(position, size, mode, rules, greetingId, phone)
+    }
+
+    /** The red number and the green dot for a circle of `size` dp, scaled from the 56 dp bubble's (the website's badgeMetrics; the same numbers). */
+    data class BadgeMetrics(
+        val pillHeight: Float,
+        val pillFont: Float,
+        val pillPadding: Float,
+        val pillOffset: Float,
+        val dot: Float,
+        val dotOffset: Float,
+        val border: Float,
+    )
+
+    fun badgeMetrics(size: Int): BadgeMetrics {
+        val s = size / 56.0
+        fun round(v: Double) = Math.round(v).toFloat()
+        return BadgeMetrics(
+            pillHeight = round(20 * s),
+            pillFont = Math.round(11 * s * 2) / 2f,
+            pillPadding = round(5 * s),
+            pillOffset = round(4 * s),
+            dot = round(16 * s),
+            dotOffset = round(2 * s),
+            border = if (s < 1) 1.5f else 2f,
+        )
     }
 
     // ── Which screens ─────────────────────────────────────────────────────

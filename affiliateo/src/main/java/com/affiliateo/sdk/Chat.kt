@@ -345,11 +345,13 @@ internal object LiveChat {
             stopPolling()
             return
         }
-        if (existing != null && (existing.sizeDp != style.size || existing.position != style.position)) {
+        // A phone gets the owner's phone size ("auto" makes it smaller), a tablet the other.
+        val size = if (activity.resources.configuration.smallestScreenWidthDp < 600) style.sizePhone else style.size
+        if (existing != null && (existing.sizeDp != size || existing.position != style.position)) {
             content.removeView(existing)
             existing = null
         }
-        val bubble = existing ?: ChatBubbleView(activity, e.appId, style.size, style.position) { open(activity) }.also {
+        val bubble = existing ?: ChatBubbleView(activity, e.appId, size, style.position) { open(activity) }.also {
             it.tag = BUBBLE_TAG
             content.addView(it)
         }
@@ -420,6 +422,8 @@ internal class ChatBubbleView(
 
     private val circlePx = dp(sizeDp.toFloat())
     private val padPx = dp(4f)
+    /** The red number and the green dot, scaled with the circle. */
+    private val badge = ChatRules.badgeMetrics(sizeDp)
     private val boxPx = circlePx + 2 * padPx
 
     private val pill = TextView(context)
@@ -472,28 +476,41 @@ internal class ChatBubbleView(
         addView(art, LayoutParams(circlePx, circlePx).apply { leftMargin = padPx; topMargin = padPx })
 
         pill.setTextColor(Color.WHITE)
-        pill.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+        pill.setTextSize(TypedValue.COMPLEX_UNIT_SP, badge.pillFont)
         pill.typeface = Typeface.DEFAULT_BOLD
         pill.gravity = Gravity.CENTER
-        pill.minWidth = dp(20f)
-        pill.setPadding(dp(5f), 0, dp(5f), 0)
+        pill.minWidth = dp(badge.pillHeight)
+        pill.setPadding(dp(badge.pillPadding), 0, dp(badge.pillPadding), 0)
         pill.includeFontPadding = false
         pill.background = GradientDrawable().apply {
             setColor(Color.parseColor("#EF4444"))
-            cornerRadius = dp(10f).toFloat()
-            setStroke(dp(2f), Color.WHITE)
+            cornerRadius = dp(badge.pillHeight) / 2f
+            setStroke(dp(badge.border).coerceAtLeast(1), Color.WHITE)
         }
         pill.visibility = GONE
         pill.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        addView(pill, LayoutParams(LayoutParams.WRAP_CONTENT, dp(20f), Gravity.TOP or Gravity.END))
+        // The box is 4 dp bigger than the circle on each side; the pill sits pillOffset out from the circle.
+        addView(
+            pill,
+            LayoutParams(LayoutParams.WRAP_CONTENT, dp(badge.pillHeight), Gravity.TOP or Gravity.END).apply {
+                topMargin = padPx - dp(badge.pillOffset)
+                rightMargin = padPx - dp(badge.pillOffset)
+            },
+        )
 
         dot.background = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(Color.parseColor("#22C55E"))
-            setStroke(dp(2f), Color.WHITE)
+            setStroke(dp(badge.border).coerceAtLeast(1), Color.WHITE)
         }
         dot.visibility = GONE
-        addView(dot, LayoutParams(dp(16f), dp(16f)).apply { leftMargin = dp(2f); topMargin = dp(2f) })
+        addView(
+            dot,
+            LayoutParams(dp(badge.dot), dp(badge.dot)).apply {
+                leftMargin = padPx - dp(badge.dotOffset)
+                topMargin = padPx - dp(badge.dotOffset)
+            },
+        )
     }
 
     override fun getAccessibilityClassName(): CharSequence = Button::class.java.name

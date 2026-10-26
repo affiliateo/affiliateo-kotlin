@@ -10,6 +10,10 @@ plugins {
     id("maven-publish")
 }
 
+// 4.14.1: Live Chat's "auto" bubble size: small on a phone, medium on a
+//         tablet (smallest width 600 dp and up), the size a new app starts
+//         with. The red number and the green dot now scale with the bubble,
+//         so a small bubble keeps the same look.
 // 4.14.0: Live Chat. Affiliateo.showChatBubble() draws a draggable chat
 //         bubble over the app's screens and Affiliateo.openChat(activity)
 //         opens the chat from the app's own button; the business answers
@@ -77,7 +81,7 @@ plugins {
 // install (Meta / TikTok / Google Ads) gets its source labelled server-side
 // with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-version = "4.14.0"
+version = "4.14.1"
 
 android {
     namespace = "com.affiliateo.sdk"
