@@ -50,6 +50,7 @@ class ChatRulesTest {
         assertEquals("v_123", parts["v"])
         assertEquals("user 1&2", parts["u"])
         assertEquals(token, parts["t"])
+        assertNull(parts["fresh"])
         assertEquals("dark", parts["theme"])
         // A space is %20 (never +) and & is escaped, not read as a separator.
         assertTrue(url.contains("u=user%201%262"))
@@ -69,6 +70,27 @@ class ChatRulesTest {
     fun noTokenNoT() {
         assertNull(fragment(ChatRules.chatUrl(env(), null, "android", "en", null))["t"])
         assertNull(fragment(ChatRules.chatUrl(env(), "lct_bad", "android", "en", null))["t"])
+    }
+
+    @Test
+    fun noTokenAsksForAFreshThread() {
+        // After a sign-out the page must drop the token it kept itself.
+        assertEquals("1", fragment(ChatRules.chatUrl(env(), null, "android", "en", null))["fresh"])
+        assertEquals("1", fragment(ChatRules.chatUrl(env(), "lct_bad", "android", "en", null))["fresh"])
+        assertEquals("1", fragment(ChatRules.chatUrl(env(optedOut = true), null, "android", "en", null))["fresh"])
+        assertNull(fragment(ChatRules.chatUrl(env(optedOut = true), token, "android", "en", null))["fresh"])
+    }
+
+    @Test
+    fun aReloadKeepsTheThreadTheFirstLoadStarted() {
+        val first = ChatRules.chatUrl(env(), null, "android", "en", "dark")
+        val again = ChatRules.withoutFresh(first)
+        assertNull(fragment(again)["fresh"])
+        assertEquals("dark", fragment(again)["theme"])
+        assertEquals("user 1&2", fragment(again)["u"])
+        assertEquals(first.replace("&fresh=1", ""), again)
+        val withToken = ChatRules.chatUrl(env(), token, "android", "en", null)
+        assertEquals(withToken, ChatRules.withoutFresh(withToken))
     }
 
     @Test

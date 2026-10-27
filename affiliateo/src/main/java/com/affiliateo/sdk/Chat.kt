@@ -69,7 +69,8 @@ import java.util.Locale
  * (android.R.id.content) as it comes up, so a dialog or a new screen the app
  * opens covers it. The visitor's key to their thread (a token the server
  * hands out with their first message) is kept in the SDK's own
- * SharedPreferences, like everything else it keeps.
+ * SharedPreferences, like everything else it keeps. Affiliateo.logout()
+ * drops it (4.14.2), so the next person on the phone starts a new thread.
  */
 internal object LiveChat {
     private const val LOG_TAG = "Affiliateo"
@@ -98,6 +99,8 @@ internal object LiveChat {
     private var currentScreen: String? = null
     private var wantsBubble = false
     private var screenOpen = false
+    /** The chat screen while it is up, so a sign-out can close it. */
+    private var chatScreen: WeakReference<ChatActivity>? = null
     private var poll: Job? = null
 
     private val env: ChatRules.Env? get() = Affiliateo.chatEnv()
@@ -184,6 +187,24 @@ internal object LiveChat {
         if (wantsBubble && config != null) placeBubble()
     }
 
+    /**
+     * The person signed out (Affiliateo.logout()). Their token goes right
+     * away, then their red number, the poll and an open chat, so whoever
+     * signs in next starts a new thread. The bubble's place and the greeting
+     * seen belong to the phone, not the person: they stay.
+     */
+    fun forget() {
+        val e = env ?: return
+        val ctx = Affiliateo.chatContext() ?: return
+        prefs(ctx).edit().remove(ChatRules.tokenKey(e.appId)).apply()
+        onMain {
+            stopPolling()
+            unreadCheckedAt = 0L
+            setUnread(0)
+            chatScreen?.get()?.finish()
+        }
+    }
+
     // ── The server ────────────────────────────────────────────────────────
 
     /** Whether the business has the chat on for this app. A network failure keeps the last answer; anything but a 200 reads as off. */
@@ -252,6 +273,8 @@ internal object LiveChat {
                 null
             }
         } ?: return
+        // A sign-out while this was on its way: the count was the last person's.
+        if (storedToken(ctx, e.appId) != token) return
         // An open chat has just shown them everything.
         if (!screenOpen) setUnread(count)
     }
@@ -392,10 +415,14 @@ internal object LiveChat {
         }
     }
 
-    fun chatOpened() = onMain { screenOpen = true }
+    fun chatOpened(activity: ChatActivity) = onMain {
+        screenOpen = true
+        chatScreen = WeakReference(activity)
+    }
 
     fun chatClosed() = onMain {
         screenOpen = false
+        chatScreen = null
         unread = 0
         placeBubble()
     }

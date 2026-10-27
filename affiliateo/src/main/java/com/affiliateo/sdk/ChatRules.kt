@@ -195,6 +195,8 @@ internal object ChatRules {
     /**
      * The chat page for this app. The ids are left out while the person has
      * opted out of tracking; the token goes in only when there is one.
+     * Without one, fresh=1 tells the page to drop a token it kept itself (the
+     * last person's, after a sign-out) and start a new thread.
      */
     fun chatUrl(env: Env, token: String?, platform: String, language: String, theme: String?): String {
         val fragment = mutableListOf("p=$platform", "close=1")
@@ -206,9 +208,16 @@ internal object ChatRules {
             add("v", env.visitorId)
             add("u", env.userId)
         }
-        if (isToken(token)) add("t", token)
+        if (isToken(token)) add("t", token) else fragment.add("fresh=1")
         add("theme", theme)
         return "${base(env.apiUrl)}/embed/chat/${encode(env.appId)}?lang=${encode(language)}#${fragment.joinToString("&")}"
+    }
+
+    /** The same page without fresh=1. It is for the first load only: a reload must keep the thread the page has started since. */
+    fun withoutFresh(url: String): String {
+        val hash = url.indexOf('#')
+        if (hash < 0) return url
+        return url.substring(0, hash + 1) + url.substring(hash + 1).split("&").filter { it != "fresh=1" }.joinToString("&")
     }
 
     /**

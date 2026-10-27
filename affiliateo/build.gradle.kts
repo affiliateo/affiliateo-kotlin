@@ -11,7 +11,9 @@ plugins {
 }
 
 // 4.14.2: Live Chat's bubble draws its speech bubble at 60% of the circle
-//         (it was half), as the website's bubble now does.
+//         (it was half), as the website's bubble now does. logout() and
+//         reset() forget the person's chat (its token, red number and open
+//         screen), so the next person on the phone starts a new thread.
 // 4.14.1: Live Chat's "auto" bubble size: small on a phone, medium on a
 //         tablet (smallest width 600 dp and up), the size a new app starts
 //         with. The red number and the green dot now scale with the bubble,

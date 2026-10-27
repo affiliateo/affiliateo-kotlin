@@ -387,7 +387,8 @@ object Affiliateo {
      * over as a new anonymous customer of the app, so whoever signs in next
      * (or nobody) is not counted as the person who just left, and everything
      * already recorded stays with them. Forgets the stored user id, their
-     * email hash and the saved free access answer.
+     * email hash, the saved free access answer and (4.14.2) their Live Chat
+     * thread: the next person to open the chat starts a new one.
      *
      * Tracking carries on: same device id, same visitor id, same
      * obfuscatedAccountId, nothing to restart. A sign-out made offline (or
@@ -405,6 +406,8 @@ object Affiliateo {
         // unlock from the person who just left.
         freeAccessEpoch.incrementAndGet()
         clearFreeAccess()
+        // Nor may the chat open their thread (4.14.2).
+        LiveChat.forget()
         saveUserState()
         scope?.launch {
             syncedUser = null

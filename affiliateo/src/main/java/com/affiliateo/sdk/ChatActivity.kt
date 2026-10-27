@@ -49,7 +49,9 @@ class ChatActivity : Activity() {
         url = intent.getStringExtra(EXTRA_URL) ?: return finish()
         apiUrl = intent.getStringExtra(EXTRA_API_URL) ?: return finish()
         appId = intent.getStringExtra(EXTRA_APP_ID) ?: return finish()
-        LiveChat.chatOpened()
+        // Recreated (Android ended the app while it was away): the first load already happened.
+        if (savedInstanceState != null) url = ChatRules.withoutFresh(url)
+        LiveChat.chatOpened(this)
 
         background = if (dark) Color.parseColor("#111214") else Color.WHITE
         root = FrameLayout(this)
@@ -109,7 +111,7 @@ class ChatActivity : Activity() {
                 return true
             }
 
-            /** The page's process ended (memory pressure): start it again. The page keeps the thread's token in its own storage too. */
+            /** The page's process ended (memory pressure): start it again, without fresh=1. The page keeps the thread's token in its own storage too. */
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
                 if (view === webView) {
                     root.removeView(view)
@@ -123,9 +125,12 @@ class ChatActivity : Activity() {
         root.addView(web, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         webView = web
         web.loadUrl(url)
+        url = ChatRules.withoutFresh(url)
     }
 
     internal fun received(json: String) {
+        // Closing (a sign-out among others): a late token is not kept.
+        if (isFinishing) return
         // Only the chat page itself may speak.
         val current = webView?.url ?: return
         if (!ChatRules.isChatPage(current, apiUrl)) return
