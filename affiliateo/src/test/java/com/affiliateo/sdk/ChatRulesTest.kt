@@ -226,6 +226,14 @@ class ChatRulesTest {
     }
 
     @Test
+    fun sendColorSetInCodeGoesToTheChatPage() {
+        val parts = fragment(ChatRules.chatUrl(env(), null, "android", "en", null, sendColor = "#007aff"))
+        assertEquals("#007aff", parts["sc"])
+        assertEquals(null, parts["c"])
+        assertEquals(null, fragment(ChatRules.chatUrl(env(), null, "android", "en", null))["sc"])
+    }
+
+    @Test
     fun glassStyle() {
         assertEquals("glass", ChatRules.parseConfig("""{"enabled":true,"bubble":{"style":"glass"}}""").bubble.style)
         // Anything else, or a server from before the style, is the blue circle.

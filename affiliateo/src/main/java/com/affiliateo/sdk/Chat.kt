@@ -433,11 +433,7 @@ internal object LiveChat {
             platform = "android",
             language = Locale.getDefault().toLanguageTag(),
             theme = if (dark) "dark" else "light",
-            colors = if (look.color != null || look.iconColor != null) {
-                Pair(look.color ?: config?.bubble?.color ?: "#1754d8", look.iconColor ?: config?.bubble?.iconColor ?: "#ffffff")
-            } else {
-                null
-            },
+            sendColor = look.sendColor,
         )
         // They see the greeting now; a new one counts again.
         config?.bubble?.greetingId?.let { prefs(activity).edit().putString(ChatRules.greetingKey(e.appId), it).apply() }
