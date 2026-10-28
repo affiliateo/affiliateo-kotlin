@@ -492,6 +492,17 @@ object Affiliateo {
     fun hideChatBubble() = LiveChat.hideBubble()
 
     /**
+     * Keep the chat bubble above your app's own bottom bar (4.15.0): a tab
+     * bar or a floating button. The bubble starts this many dp above the
+     * system bars and is never dragged below them.
+     *
+     * ```kotlin
+     * Affiliateo.setChatBubblePadding(bottom = 72)
+     * ```
+     */
+    fun setChatBubblePadding(bottom: Int) = LiveChat.setBottomPadding(bottom)
+
+    /**
      * Open the chat from your own button (4.14.0), full screen over [activity].
      * Does nothing while Live Chat is off for this app (with debug = true it
      * says so in Logcat).

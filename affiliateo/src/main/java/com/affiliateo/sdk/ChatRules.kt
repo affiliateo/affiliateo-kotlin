@@ -62,6 +62,8 @@ internal object ChatRules {
         val greetingId: String? = null,
         /** The circle on a phone (smaller than size for the owner's "auto"). */
         val sizePhone: Int = size,
+        /** "standard" (the blue circle) or "glass" (a see-through blue glass circle). */
+        val style: String = "standard",
     ) {
         companion object {
             val STANDARD = Bubble()
@@ -84,6 +86,9 @@ internal object ChatRules {
 
     fun tokenKey(appId: String) = "affiliateo_chat_token_$appId"
     fun positionKey(appId: String) = "affiliateo_chat_pos_$appId"
+    /** The server's last answer about the chat (4.15.0): the bubble shows from it at once on the next launch while a fresh one is asked for. */
+    fun configKey(appId: String) = "affiliateo_chat_config_$appId"
+
     fun greetingKey(appId: String) = "affiliateo_chat_greeting_seen_$appId"
 
     // ── The token ─────────────────────────────────────────────────────────
@@ -122,7 +127,8 @@ internal object ChatRules {
         }
         val greetingId = if (b.isNull("greeting_id")) null else b.optString("greeting_id").takeIf { it.isNotEmpty() }
         val phone = b.optInt("size_points_phone", size).takeIf { it in 40..80 } ?: size
-        return Bubble(position, size, mode, rules, greetingId, phone)
+        val style = if (b.optString("style") == "glass") "glass" else "standard"
+        return Bubble(position, size, mode, rules, greetingId, phone, style)
     }
 
     /** The red number and the green dot for a circle of `size` dp, scaled from the 56 dp bubble's (the website's badgeMetrics; the same numbers). */
@@ -199,7 +205,8 @@ internal object ChatRules {
      * last person's, after a sign-out) and start a new thread.
      */
     fun chatUrl(env: Env, token: String?, platform: String, language: String, theme: String?): String {
-        val fragment = mutableListOf("p=$platform", "close=1")
+        // sheet=1: the page slides up as a sheet (4.15.0) and keeps room at its top.
+        val fragment = mutableListOf("p=$platform", "close=1", "sheet=1")
         fun add(key: String, value: String?) {
             if (!value.isNullOrEmpty()) fragment.add("$key=${encode(value)}")
         }

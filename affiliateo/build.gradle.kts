@@ -85,7 +85,7 @@ plugins {
 // install (Meta / TikTok / Google Ads) gets its source labelled server-side
 // with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-version = "4.14.2"
+version = "4.15.0"
 
 android {
     namespace = "com.affiliateo.sdk"

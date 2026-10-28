@@ -10,7 +10,7 @@
         <activity
             android:name="com.affiliateo.sdk.ChatActivity"
             android:exported="false"
-            android:theme="@android:style/Theme.Material.Light.NoActionBar"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density"
             android:windowSoftInputMode="adjustResize" />
     </application>

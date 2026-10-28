@@ -76,6 +76,7 @@ class ChatRulesTest {
     fun noTokenAsksForAFreshThread() {
         // After a sign-out the page must drop the token it kept itself.
         assertEquals("1", fragment(ChatRules.chatUrl(env(), null, "android", "en", null))["fresh"])
+        assertEquals("1", fragment(ChatRules.chatUrl(env(), null, "android", "en", null))["sheet"])
         assertEquals("1", fragment(ChatRules.chatUrl(env(), "lct_bad", "android", "en", null))["fresh"])
         assertEquals("1", fragment(ChatRules.chatUrl(env(optedOut = true), null, "android", "en", null))["fresh"])
         assertNull(fragment(ChatRules.chatUrl(env(optedOut = true), token, "android", "en", null))["fresh"])
@@ -193,6 +194,14 @@ class ChatRulesTest {
         val plain = ChatRules.parseConfig("""{"enabled":true,"show_bubble":true,"bubble":{"position":"middle","size_points":500,"page_mode":"x","greeting_id":null}}""")
         assertEquals(ChatRules.Bubble.STANDARD, plain.bubble)
         assertEquals(ChatRules.Bubble.STANDARD, ChatRules.parseConfig("""{"enabled":true}""").bubble)
+    }
+
+    @Test
+    fun glassStyle() {
+        assertEquals("glass", ChatRules.parseConfig("""{"enabled":true,"bubble":{"style":"glass"}}""").bubble.style)
+        // Anything else, or a server from before the style, is the blue circle.
+        assertEquals("standard", ChatRules.parseConfig("""{"enabled":true,"bubble":{"style":"neon"}}""").bubble.style)
+        assertEquals("standard", ChatRules.parseConfig("""{"enabled":true,"bubble":{}}""").bubble.style)
     }
 
     @Test

@@ -98,6 +98,8 @@ internal object LiveChat {
     /** The name the app last passed to page(). */
     private var currentScreen: String? = null
     private var wantsBubble = false
+    /** Dp the app keeps free above the bottom bars (its own tab bar or floating button). */
+    private var bottomPaddingDp = 0
     private var screenOpen = false
     /** The chat screen while it is up, so a sign-out can close it. */
     private var chatScreen: WeakReference<ChatActivity>? = null
@@ -148,11 +150,31 @@ internal object LiveChat {
     fun showBubble() = onMain {
         wantsBubble = true
         // Placed once configure() runs (install).
-        if (env == null) return@onMain
+        val e = env ?: return@onMain
+        // At once from the last answer this phone kept, then checked with the
+        // server (turned off there, it goes away again).
+        val ctx = Affiliateo.chatContext()
+        if (config == null && ctx != null) {
+            prefs(ctx).getString(ChatRules.configKey(e.appId), null)?.let { saved ->
+                val answer = ChatRules.parseConfig(saved)
+                if (answer.enabled) {
+                    config = answer
+                    placeBubble()
+                }
+            }
+        }
         scope.launch {
-            refreshConfig(force = config == null)
+            refreshConfig(force = configCheckedAt == 0L)
             placeBubble()
             refreshUnread(force = true)
+        }
+    }
+
+    fun setBottomPadding(dp: Int) = onMain {
+        bottomPaddingDp = dp.coerceIn(0, 400)
+        bubbleIn(resumed?.get())?.let {
+            it.bottomPaddingDp = bottomPaddingDp
+            it.requestPlace()
         }
     }
 
@@ -221,8 +243,13 @@ internal object LiveChat {
                     conn.readTimeout = 10_000
                     conn.useCaches = !force
                     try {
-                        if (conn.responseCode == 200) ChatRules.parseConfig(conn.inputStream.bufferedReader().readText())
-                        else ChatRules.Config.OFF
+                        if (conn.responseCode == 200) {
+                            val text = conn.inputStream.bufferedReader().readText()
+                            Affiliateo.chatContext()?.let { prefs(it).edit().putString(ChatRules.configKey(e.appId), text).apply() }
+                            ChatRules.parseConfig(text)
+                        } else {
+                            ChatRules.Config.OFF
+                        }
                     } finally {
                         conn.disconnect()
                     }
@@ -370,13 +397,19 @@ internal object LiveChat {
         }
         // A phone gets the owner's phone size ("auto" makes it smaller), a tablet the other.
         val size = if (activity.resources.configuration.smallestScreenWidthDp < 600) style.sizePhone else style.size
-        if (existing != null && (existing.sizeDp != size || existing.position != style.position)) {
+        val glass = style.style == "glass"
+        if (existing != null && (existing.sizeDp != size || existing.position != style.position || existing.glass != glass)) {
             content.removeView(existing)
             existing = null
         }
-        val bubble = existing ?: ChatBubbleView(activity, e.appId, size, style.position) { open(activity) }.also {
+        val bubble = existing ?: ChatBubbleView(activity, e.appId, size, style.position, glass) { open(activity) }.also {
             it.tag = BUBBLE_TAG
+            it.bottomPaddingDp = bottomPaddingDp
             content.addView(it)
+        }
+        if (bubble.bottomPaddingDp != bottomPaddingDp) {
+            bubble.bottomPaddingDp = bottomPaddingDp
+            bubble.requestPlace()
         }
         bubble.bringToFront()
         paintBubble()
@@ -409,6 +442,9 @@ internal object LiveChat {
             .putExtra(ChatActivity.EXTRA_DEBUG, e.debug)
         try {
             activity.startActivity(intent)
+            // The sheet slides itself up: no window animation on top of it.
+            @Suppress("DEPRECATION")
+            activity.overridePendingTransition(0, 0)
         } catch (err: Exception) {
             screenOpen = false
             Log.w(LOG_TAG, "openChat: the chat screen did not open (${err.javaClass.simpleName})")
@@ -442,8 +478,12 @@ internal class ChatBubbleView(
     val sizeDp: Int,
     /** The owner's corner: bottom-right, bottom-left, top-right or top-left. */
     val position: String,
+    /** The owner's "Glass" style: a see-through blue glass circle. */
+    val glass: Boolean,
     private val onTap: () -> Unit,
 ) : FrameLayout(context) {
+    /** Dp the app keeps free above the bottom bars: the bubble starts above them and is never dragged into them. */
+    var bottomPaddingDp = 0
     private val density = context.resources.displayMetrics.density
     private fun dp(value: Float) = (value * density).toInt()
 
@@ -483,24 +523,29 @@ internal class ChatBubbleView(
                 outline.setOval(padPx, padPx, padPx + circlePx, padPx + circlePx)
             }
         }
-        elevation = dp(8f).toFloat()
-        if (Build.VERSION.SDK_INT >= 28) {
-            outlineSpotShadowColor = Color.parseColor("#1754D8")
-            outlineAmbientShadowColor = Color.parseColor("#1754D8")
-        }
-
-        val art = ImageView(context)
-        val png = Base64.decode(ChatBubbleImage.PNG_BASE64, Base64.DEFAULT)
-        art.setImageBitmap(BitmapFactory.decodeByteArray(png, 0, png.size))
-        art.scaleType = ImageView.ScaleType.FIT_XY
-        art.outlineProvider = object : ViewOutlineProvider() {
-            override fun getOutline(view: View, outline: Outline) {
-                outline.setOval(0, 0, view.width, view.height)
+        if (glass) {
+            // A see-through glass circle casts no solid shadow: the stroke and the light edge carry it.
+            addView(GlassCircle(context, circlePx), LayoutParams(circlePx, circlePx).apply { leftMargin = padPx; topMargin = padPx })
+        } else {
+            elevation = dp(8f).toFloat()
+            if (Build.VERSION.SDK_INT >= 28) {
+                outlineSpotShadowColor = Color.parseColor("#1754D8")
+                outlineAmbientShadowColor = Color.parseColor("#1754D8")
             }
+
+            val art = ImageView(context)
+            val png = Base64.decode(ChatBubbleImage.PNG_BASE64, Base64.DEFAULT)
+            art.setImageBitmap(BitmapFactory.decodeByteArray(png, 0, png.size))
+            art.scaleType = ImageView.ScaleType.FIT_XY
+            art.outlineProvider = object : ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: Outline) {
+                    outline.setOval(0, 0, view.width, view.height)
+                }
+            }
+            art.clipToOutline = true
+            art.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+            addView(art, LayoutParams(circlePx, circlePx).apply { leftMargin = padPx; topMargin = padPx })
         }
-        art.clipToOutline = true
-        art.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        addView(art, LayoutParams(circlePx, circlePx).apply { leftMargin = padPx; topMargin = padPx })
 
         pill.setTextColor(Color.WHITE)
         pill.setTextSize(TypedValue.COMPLEX_UNIT_SP, badge.pillFont)
@@ -562,6 +607,8 @@ internal class ChatBubbleView(
         post { place() }
     }
 
+    fun requestPlace() = post { place() }
+
     /** In the owner's corner, or where the person left it. */
     private fun place() {
         val spot = dragged
@@ -576,7 +623,7 @@ internal class ChatBubbleView(
         val isLeft = position.endsWith("left")
         params.gravity = (if (isTop) Gravity.TOP else Gravity.BOTTOM) or (if (isLeft) Gravity.START else Gravity.END)
         params.topMargin = if (isTop) margin + top else 0
-        params.bottomMargin = if (isTop) 0 else margin + bottom
+        params.bottomMargin = if (isTop) 0 else margin + bottom + dp(bottomPaddingDp.toFloat())
         params.leftMargin = if (isLeft) margin + left else 0
         params.rightMargin = if (isLeft) 0 else margin + right
         layoutParams = params
@@ -629,7 +676,7 @@ internal class ChatBubbleView(
         val width = parent.width / density
         val height = parent.height / density
         val minX = right / density + 8f
-        val minY = bottom / density + 8f
+        val minY = bottom / density + bottomPaddingDp + 8f
         val maxX = (width - sizeDp - left / density - 8f).coerceAtLeast(minX)
         val maxY = (height - sizeDp - top / density - 8f).coerceAtLeast(minY)
         return Pair(point.first.coerceIn(minX, maxX), point.second.coerceIn(minY, maxY))
@@ -686,3 +733,62 @@ internal class ChatBubbleView(
         return true
     }
 }
+
+/**
+ * The "Glass" bubble: a see-through blue circle (the screen shows through),
+ * light at the top like glass, with a fine white edge and the website's white
+ * speech bubble filling 60% of it. Android has no Liquid Glass, so this is
+ * its glass look.
+ */
+@SuppressLint("ViewConstructor")
+internal class GlassCircle(context: Context, private val sizePx: Int) : View(context) {
+    private val density = context.resources.displayMetrics.density
+    private val fill = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(150, 0x17, 0x54, 0xD8) }
+    private val shine = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+    private val edge = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = density
+        color = Color.argb(140, 255, 255, 255)
+    }
+    private val glyph = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val bubblePath = speechBubble(sizePx.toFloat())
+
+    init {
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+        shine.shader = android.graphics.LinearGradient(
+            0f, 0f, 0f, sizePx.toFloat(),
+            Color.argb(90, 255, 255, 255), Color.argb(0, 255, 255, 255),
+            android.graphics.Shader.TileMode.CLAMP,
+        )
+    }
+
+    override fun onDraw(canvas: android.graphics.Canvas) {
+        val r = sizePx / 2f
+        canvas.drawCircle(r, r, r, fill)
+        canvas.drawCircle(r, r, r, shine)
+        canvas.drawCircle(r, r, r - edge.strokeWidth / 2, edge)
+        canvas.drawPath(bubblePath, glyph)
+    }
+
+    companion object {
+        /** The website bubble's speech bubble (public/chat.js, a 24-point drawing) filling 60% of a circle of `size`. */
+        fun speechBubble(size: Float): android.graphics.Path {
+            val scale = size * 0.6f / 24f
+            val inset = size * 0.2f
+            fun x(v: Float) = inset + v * scale
+            fun y(v: Float) = inset + v * scale
+            return android.graphics.Path().apply {
+                moveTo(x(12f), y(2.5f))
+                cubicTo(x(17.25f), y(2.5f), x(21.5f), y(6.4f), x(21.5f), y(11.25f))
+                cubicTo(x(21.5f), y(16.1f), x(17.25f), y(20f), x(12f), y(20f))
+                cubicTo(x(10.9f), y(20f), x(9.85f), y(19.83f), x(8.87f), y(19.52f))
+                cubicTo(x(7.3f), y(20.9f), x(5.2f), y(21.55f), x(3.05f), y(21.45f))
+                cubicTo(x(4.35f), y(20.55f), x(5.2f), y(19.3f), x(5.45f), y(17.85f))
+                cubicTo(x(3.6f), y(16.25f), x(2.5f), y(13.87f), x(2.5f), y(11.25f))
+                cubicTo(x(2.5f), y(6.4f), x(6.75f), y(2.5f), x(12f), y(2.5f))
+                close()
+            }
+        }
+    }
+}
+
