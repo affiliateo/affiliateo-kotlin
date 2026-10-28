@@ -6,7 +6,6 @@ import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
-import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.Typeface
@@ -15,7 +14,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.util.Base64
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
@@ -27,7 +25,6 @@ import android.view.ViewOutlineProvider
 import android.view.WindowInsets
 import android.widget.Button
 import android.widget.FrameLayout
-import android.widget.ImageView
 import android.widget.TextView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -398,11 +395,12 @@ internal object LiveChat {
         // A phone gets the owner's phone size ("auto" makes it smaller), a tablet the other.
         val size = if (activity.resources.configuration.smallestScreenWidthDp < 600) style.sizePhone else style.size
         val glass = style.style == "glass"
-        if (existing != null && (existing.sizeDp != size || existing.position != style.position || existing.glass != glass)) {
+        val colors = Pair(style.color, style.iconColor)
+        if (existing != null && (existing.sizeDp != size || existing.position != style.position || existing.glass != glass || existing.colors != colors)) {
             content.removeView(existing)
             existing = null
         }
-        val bubble = existing ?: ChatBubbleView(activity, e.appId, size, style.position, glass) { open(activity) }.also {
+        val bubble = existing ?: ChatBubbleView(activity, e.appId, size, style.position, glass, colors) { open(activity) }.also {
             it.tag = BUBBLE_TAG
             it.bottomPaddingDp = bottomPaddingDp
             content.addView(it)
@@ -478,8 +476,10 @@ internal class ChatBubbleView(
     val sizeDp: Int,
     /** The owner's corner: bottom-right, bottom-left, top-right or top-left. */
     val position: String,
-    /** The owner's "Glass" style: a see-through blue glass circle. */
+    /** The owner's "Glass" style: a see-through glass circle tinted with the bubble color. */
     val glass: Boolean,
+    /** The owner's circle and icon colors (#rrggbb), as the config gave them. */
+    val colors: Pair<String, String>,
     private val onTap: () -> Unit,
 ) : FrameLayout(context) {
     /** Dp the app keeps free above the bottom bars: the bubble starts above them and is never dragged into them. */
@@ -523,29 +523,20 @@ internal class ChatBubbleView(
                 outline.setOval(padPx, padPx, padPx + circlePx, padPx + circlePx)
             }
         }
-        if (glass) {
-            // A see-through glass circle casts no solid shadow: the stroke and the light edge carry it.
-            addView(GlassCircle(context, circlePx), LayoutParams(circlePx, circlePx).apply { leftMargin = padPx; topMargin = padPx })
-        } else {
+        val tint = ChatRules.colorInt(colors.first)
+        if (!glass) {
+            // The solid circle casts its own shadow, in its color; glass carries
+            // its edge with the stroke and the light at the top instead.
             elevation = dp(8f).toFloat()
             if (Build.VERSION.SDK_INT >= 28) {
-                outlineSpotShadowColor = Color.parseColor("#1754D8")
-                outlineAmbientShadowColor = Color.parseColor("#1754D8")
+                outlineSpotShadowColor = tint
+                outlineAmbientShadowColor = tint
             }
-
-            val art = ImageView(context)
-            val png = Base64.decode(ChatBubbleImage.PNG_BASE64, Base64.DEFAULT)
-            art.setImageBitmap(BitmapFactory.decodeByteArray(png, 0, png.size))
-            art.scaleType = ImageView.ScaleType.FIT_XY
-            art.outlineProvider = object : ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: Outline) {
-                    outline.setOval(0, 0, view.width, view.height)
-                }
-            }
-            art.clipToOutline = true
-            art.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-            addView(art, LayoutParams(circlePx, circlePx).apply { leftMargin = padPx; topMargin = padPx })
         }
+        addView(
+            BubbleCircle(context, circlePx, tint, ChatRules.colorInt(colors.second), glass),
+            LayoutParams(circlePx, circlePx).apply { leftMargin = padPx; topMargin = padPx },
+        )
 
         pill.setTextColor(Color.WHITE)
         pill.setTextSize(TypedValue.COMPLEX_UNIT_SP, badge.pillFont)
@@ -735,38 +726,56 @@ internal class ChatBubbleView(
 }
 
 /**
- * The "Glass" bubble: a see-through blue circle (the screen shows through),
- * light at the top like glass, with a fine white edge and the website's white
- * speech bubble filling 60% of it. Android has no Liquid Glass, so this is
- * its glass look.
+ * The bubble's circle in the owner's colors, with the website's speech bubble
+ * in the icon color filling 60% of it. Solid: the color, a little lighter at
+ * the top left (the website's gradient). Glass: see-through, tinted with the
+ * color, light at the top like glass, with a fine white edge (Android has no
+ * Liquid Glass, so this is its glass look).
  */
 @SuppressLint("ViewConstructor")
-internal class GlassCircle(context: Context, private val sizePx: Int) : View(context) {
+internal class BubbleCircle(
+    context: Context,
+    private val sizePx: Int,
+    color: Int,
+    iconColor: Int,
+    private val glass: Boolean,
+) : View(context) {
     private val density = context.resources.displayMetrics.density
-    private val fill = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(150, 0x17, 0x54, 0xD8) }
+    private val fill = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
     private val shine = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
     private val edge = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
         style = android.graphics.Paint.Style.STROKE
         strokeWidth = density
-        color = Color.argb(140, 255, 255, 255)
+        this.color = Color.argb(140, 255, 255, 255)
     }
-    private val glyph = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val glyph = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { this.color = iconColor }
     private val bubblePath = speechBubble(sizePx.toFloat())
 
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        shine.shader = android.graphics.LinearGradient(
-            0f, 0f, 0f, sizePx.toFloat(),
-            Color.argb(90, 255, 255, 255), Color.argb(0, 255, 255, 255),
-            android.graphics.Shader.TileMode.CLAMP,
-        )
+        val size = sizePx.toFloat()
+        if (glass) {
+            fill.color = Color.argb(150, Color.red(color), Color.green(color), Color.blue(color))
+            shine.shader = android.graphics.LinearGradient(
+                0f, 0f, 0f, size,
+                Color.argb(90, 255, 255, 255), Color.argb(0, 255, 255, 255),
+                android.graphics.Shader.TileMode.CLAMP,
+            )
+        } else {
+            // color-mix(in oklab, color 55%, white), close enough in plain RGB.
+            fun light(c: Int) = (c * 0.55f + 255 * 0.45f).toInt()
+            val lighter = Color.rgb(light(Color.red(color)), light(Color.green(color)), light(Color.blue(color)))
+            fill.shader = android.graphics.LinearGradient(0f, 0f, size, size, lighter, color, android.graphics.Shader.TileMode.CLAMP)
+        }
     }
 
     override fun onDraw(canvas: android.graphics.Canvas) {
         val r = sizePx / 2f
         canvas.drawCircle(r, r, r, fill)
-        canvas.drawCircle(r, r, r, shine)
-        canvas.drawCircle(r, r, r - edge.strokeWidth / 2, edge)
+        if (glass) {
+            canvas.drawCircle(r, r, r, shine)
+            canvas.drawCircle(r, r, r - edge.strokeWidth / 2, edge)
+        }
         canvas.drawPath(bubblePath, glyph)
     }
 

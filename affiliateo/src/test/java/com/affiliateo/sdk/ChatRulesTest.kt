@@ -197,6 +197,18 @@ class ChatRulesTest {
     }
 
     @Test
+    fun colors() {
+        val colored = ChatRules.parseConfig("""{"enabled":true,"bubble":{"color":"#7c3aed","icon_color":"#fef3c7"}}""").bubble
+        assertEquals("#7c3aed", colored.color)
+        assertEquals("#fef3c7", colored.iconColor)
+        // Anything that is not #rrggbb keeps Affiliateo's blue and white.
+        val odd = ChatRules.parseConfig("""{"enabled":true,"bubble":{"color":"purple","icon_color":"#fff"}}""").bubble
+        assertEquals("#1754d8", odd.color)
+        assertEquals("#ffffff", odd.iconColor)
+        assertEquals(0xFF7C3AED.toInt(), ChatRules.colorInt("#7c3aed"))
+    }
+
+    @Test
     fun glassStyle() {
         assertEquals("glass", ChatRules.parseConfig("""{"enabled":true,"bubble":{"style":"glass"}}""").bubble.style)
         // Anything else, or a server from before the style, is the blue circle.

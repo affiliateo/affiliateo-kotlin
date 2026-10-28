@@ -62,8 +62,11 @@ internal object ChatRules {
         val greetingId: String? = null,
         /** The circle on a phone (smaller than size for the owner's "auto"). */
         val sizePhone: Int = size,
-        /** "standard" (the blue circle) or "glass" (a see-through blue glass circle). */
+        /** "standard" (a solid circle) or "glass" (a see-through glass circle), tinted with [color]. */
         val style: String = "standard",
+        /** The owner's circle color and the speech bubble's inside it, #rrggbb. */
+        val color: String = "#1754d8",
+        val iconColor: String = "#ffffff",
     ) {
         companion object {
             val STANDARD = Bubble()
@@ -128,7 +131,17 @@ internal object ChatRules {
         val greetingId = if (b.isNull("greeting_id")) null else b.optString("greeting_id").takeIf { it.isNotEmpty() }
         val phone = b.optInt("size_points_phone", size).takeIf { it in 40..80 } ?: size
         val style = if (b.optString("style") == "glass") "glass" else "standard"
-        return Bubble(position, size, mode, rules, greetingId, phone, style)
+        val color = b.optString("color").takeIf { HEX.matches(it) } ?: "#1754d8"
+        val iconColor = b.optString("icon_color").takeIf { HEX.matches(it) } ?: "#ffffff"
+        return Bubble(position, size, mode, rules, greetingId, phone, style, color, iconColor)
+    }
+
+    private val HEX = Regex("^#[0-9a-fA-F]{6}$")
+
+    /** A #rrggbb color as an Android color int (opaque); Affiliateo's blue for anything else. */
+    fun colorInt(hex: String): Int {
+        if (!HEX.matches(hex)) return 0xFF1754D8.toInt()
+        return (0xFF000000 or hex.substring(1).toLong(16)).toInt()
     }
 
     /** The red number and the green dot for a circle of `size` dp, scaled from the 56 dp bubble's (the website's badgeMetrics; the same numbers). */
