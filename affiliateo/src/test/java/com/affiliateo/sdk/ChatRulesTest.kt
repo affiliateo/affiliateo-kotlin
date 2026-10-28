@@ -197,6 +197,23 @@ class ChatRulesTest {
     }
 
     @Test
+    fun theAppsOwnLookWins() {
+        val dashboard = ChatRules.parseConfig("""{"enabled":true,"bubble":{"position":"bottom-right","size_points":56,"size_points_phone":48}}""").bubble
+        val mine = ChatRules.applying(ChatRules.BubbleLook(color = "#7c3aed", style = "glass", position = "top-left", sizeDp = 64), dashboard)
+        assertEquals("#7c3aed", mine.color)
+        assertEquals("#ffffff", mine.iconColor)
+        assertEquals("glass", mine.style)
+        assertEquals("top-left", mine.position)
+        assertEquals(64, mine.size)
+        assertEquals(64, mine.sizePhone)
+        // Nothing set: the dashboard's bubble as it was.
+        assertEquals(dashboard, ChatRules.applying(ChatRules.BubbleLook(), dashboard))
+        assertEquals("#7c3aed", ChatRules.hex("#7C3AED"))
+        assertEquals("#ffaa00", ChatRules.hex("fa0"))
+        assertEquals(null, ChatRules.hex("purple"))
+    }
+
+    @Test
     fun colors() {
         val colored = ChatRules.parseConfig("""{"enabled":true,"bubble":{"color":"#7c3aed","icon_color":"#fef3c7"}}""").bubble
         assertEquals("#7c3aed", colored.color)

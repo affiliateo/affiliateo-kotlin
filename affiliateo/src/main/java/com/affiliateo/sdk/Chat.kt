@@ -97,6 +97,8 @@ internal object LiveChat {
     private var wantsBubble = false
     /** Dp the app keeps free above the bottom bars (its own tab bar or floating button). */
     private var bottomPaddingDp = 0
+    /** The app's own look for the bubble (setChatBubbleLook), over the dashboard's. */
+    private var look = ChatRules.BubbleLook()
     private var screenOpen = false
     /** The chat screen while it is up, so a sign-out can close it. */
     private var chatScreen: WeakReference<ChatActivity>? = null
@@ -165,6 +167,11 @@ internal object LiveChat {
             placeBubble()
             refreshUnread(force = true)
         }
+    }
+
+    fun setLook(next: ChatRules.BubbleLook) = onMain {
+        look = next
+        placeBubble()
     }
 
     fun setBottomPadding(dp: Int) = onMain {
@@ -384,7 +391,7 @@ internal object LiveChat {
         var existing = content.findViewWithTag<ChatBubbleView>(BUBBLE_TAG)
         val cfg = config
         val e = env
-        val style = cfg?.bubble ?: ChatRules.Bubble.STANDARD
+        val style = ChatRules.applying(look, cfg?.bubble ?: ChatRules.Bubble.STANDARD)
         if (!wantsBubble || screenOpen || e == null || cfg == null || !cfg.enabled || !cfg.showBubble ||
             !ChatRules.bubbleShowsOn(style.pageMode, style.pageRules, currentScreen)
         ) {
@@ -426,6 +433,11 @@ internal object LiveChat {
             platform = "android",
             language = Locale.getDefault().toLanguageTag(),
             theme = if (dark) "dark" else "light",
+            colors = if (look.color != null || look.iconColor != null) {
+                Pair(look.color ?: config?.bubble?.color ?: "#1754d8", look.iconColor ?: config?.bubble?.iconColor ?: "#ffffff")
+            } else {
+                null
+            },
         )
         // They see the greeting now; a new one counts again.
         config?.bubble?.greetingId?.let { prefs(activity).edit().putString(ChatRules.greetingKey(e.appId), it).apply() }

@@ -503,6 +503,34 @@ object Affiliateo {
     fun setChatBubblePadding(bottom: Int) = LiveChat.setBottomPadding(bottom)
 
     /**
+     * Your own look for the chat bubble (4.15.0), over what the Live Chat
+     * settings in your dashboard say: anything you leave out keeps the
+     * dashboard's choice. Colors are hex ("#7C3AED"); the size is in dp (40
+     * to 80) for phones and tablets alike. The color also colors the person's
+     * own messages and the send button in the chat. The green online dot and
+     * the red unread number keep their colors.
+     *
+     * ```kotlin
+     * Affiliateo.setChatBubbleLook(color = "#7C3AED", iconColor = "#FFFFFF", style = ChatBubbleStyle.GLASS, corner = ChatBubbleCorner.BOTTOM_LEFT, sizeDp = 56)
+     * ```
+     */
+    fun setChatBubbleLook(
+        color: String? = null,
+        iconColor: String? = null,
+        style: ChatBubbleStyle? = null,
+        corner: ChatBubbleCorner? = null,
+        sizeDp: Int? = null,
+    ) = LiveChat.setLook(
+        ChatRules.BubbleLook(
+            color = color?.let(ChatRules::hex),
+            iconColor = iconColor?.let(ChatRules::hex),
+            style = style?.value,
+            position = corner?.value,
+            sizeDp = sizeDp?.coerceIn(40, 80),
+        ),
+    )
+
+    /**
      * Open the chat from your own button (4.14.0), full screen over [activity].
      * Does nothing while Live Chat is off for this app (with debug = true it
      * says so in Logcat).
@@ -1019,3 +1047,21 @@ object Affiliateo {
         setRevenueCatUser(rcId)
     }
 }
+
+/** The chat bubble's look, for [Affiliateo.setChatBubbleLook] (4.15.0). */
+enum class ChatBubbleStyle(internal val value: String) {
+    /** A solid circle in your color. */
+    SOLID("standard"),
+
+    /** See-through, tinted with your color. */
+    GLASS("glass"),
+}
+
+/** The corner the chat bubble starts in, for [Affiliateo.setChatBubbleLook] (4.15.0). */
+enum class ChatBubbleCorner(internal val value: String) {
+    BOTTOM_RIGHT("bottom-right"),
+    BOTTOM_LEFT("bottom-left"),
+    TOP_RIGHT("top-right"),
+    TOP_LEFT("top-left"),
+}
+

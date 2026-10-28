@@ -138,6 +138,34 @@ internal object ChatRules {
 
     private val HEX = Regex("^#[0-9a-fA-F]{6}$")
 
+    /** What the app's own code asks for (setChatBubbleLook, 4.15.0); each set field wins over the dashboard's choice, each null keeps it. */
+    data class BubbleLook(
+        val color: String? = null,
+        val iconColor: String? = null,
+        val style: String? = null,
+        val position: String? = null,
+        /** One size for phones and tablets alike, in dp. */
+        val sizeDp: Int? = null,
+    )
+
+    /** The dashboard's bubble with the app's own choices on top. */
+    fun applying(look: BubbleLook, bubble: Bubble): Bubble = bubble.copy(
+        color = look.color ?: bubble.color,
+        iconColor = look.iconColor ?: bubble.iconColor,
+        style = look.style ?: bubble.style,
+        position = look.position ?: bubble.position,
+        size = look.sizeDp ?: bubble.size,
+        sizePhone = look.sizeDp ?: bubble.sizePhone,
+    )
+
+    /** A color as the code may write it ("#7C3AED", "7c3aed", "#fa0") as #rrggbb, lowercase; null for anything else. */
+    fun hex(value: String): String? {
+        var v = value.trim().lowercase().removePrefix("#")
+        if (!v.all { it in '0'..'9' || it in 'a'..'f' }) return null
+        if (v.length == 3) v = v.map { "$it$it" }.joinToString("")
+        return if (v.length == 6) "#$v" else null
+    }
+
     /** A #rrggbb color as an Android color int (opaque); Affiliateo's blue for anything else. */
     fun colorInt(hex: String): Int {
         if (!HEX.matches(hex)) return 0xFF1754D8.toInt()
@@ -217,7 +245,7 @@ internal object ChatRules {
      * Without one, fresh=1 tells the page to drop a token it kept itself (the
      * last person's, after a sign-out) and start a new thread.
      */
-    fun chatUrl(env: Env, token: String?, platform: String, language: String, theme: String?): String {
+    fun chatUrl(env: Env, token: String?, platform: String, language: String, theme: String?, colors: Pair<String, String>? = null): String {
         // sheet=1: the page slides up as a sheet (4.15.0) and keeps room at its top.
         val fragment = mutableListOf("p=$platform", "close=1", "sheet=1")
         fun add(key: String, value: String?) {
@@ -230,6 +258,11 @@ internal object ChatRules {
         }
         if (isToken(token)) add("t", token) else fragment.add("fresh=1")
         add("theme", theme)
+        // The colors the app's own code set (the page colors the person's messages and the send arrow with them, over the dashboard's).
+        if (colors != null) {
+            add("c", colors.first)
+            add("ic", colors.second)
+        }
         return "${base(env.apiUrl)}/embed/chat/${encode(env.appId)}?lang=${encode(language)}#${fragment.joinToString("&")}"
     }
 

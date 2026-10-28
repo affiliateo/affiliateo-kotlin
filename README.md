@@ -240,6 +240,9 @@ Affiliateo.hideChatBubble()
 
 // Keep it above your own tab bar or floating button (4.15.0)
 Affiliateo.setChatBubblePadding(bottom = 72)
+
+// Your own look, over the dashboard's (4.15.0); leave out what the dashboard should decide
+Affiliateo.setChatBubbleLook(color = "#7C3AED", iconColor = "#FFFFFF", style = ChatBubbleStyle.GLASS, corner = ChatBubbleCorner.BOTTOM_LEFT, sizeDp = 56)
 ```
 
 - Nothing shows until your code calls `showChatBubble()` or `openChat()`, so
