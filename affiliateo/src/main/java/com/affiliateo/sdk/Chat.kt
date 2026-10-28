@@ -90,6 +90,8 @@ internal object LiveChat {
     private var configJob: Deferred<ChatRules.Config>? = null
     private var unreadCheckedAt = 0L
     private var unread = 0
+    /** Online for this person alone (their own affiliate counts), from the unread check, beside the config's. */
+    private var visitorOnline = false
     /** The greeting nobody on this phone has seen yet: one unread message. */
     private var greetingPending = false
     /** The name the app last passed to page(). */
@@ -232,6 +234,7 @@ internal object LiveChat {
         onMain {
             stopPolling()
             unreadCheckedAt = 0L
+            visitorOnline = false
             setUnread(0)
             chatScreen?.get()?.finish()
         }
@@ -294,7 +297,7 @@ internal object LiveChat {
         val token = storedToken(ctx, e.appId) ?: return
         if (!force && System.currentTimeMillis() - unreadCheckedAt < ChatRules.UNREAD_MAX_AGE_MS) return
         unreadCheckedAt = System.currentTimeMillis()
-        val count = withContext(Dispatchers.IO) {
+        val text = withContext(Dispatchers.IO) {
             try {
                 val conn = URL("${e.apiUrl}/api/live-chat/unread").openConnection() as HttpURLConnection
                 conn.connectTimeout = 10_000
@@ -302,7 +305,7 @@ internal object LiveChat {
                 conn.useCaches = false
                 conn.setRequestProperty("Authorization", "Bearer $token")
                 try {
-                    if (conn.responseCode == 200) ChatRules.parseUnread(conn.inputStream.bufferedReader().readText()) else null
+                    if (conn.responseCode == 200) conn.inputStream.bufferedReader().readText() else null
                 } finally {
                     conn.disconnect()
                 }
@@ -310,10 +313,12 @@ internal object LiveChat {
                 null
             }
         } ?: return
+        val count = ChatRules.parseUnread(text) ?: return
         // A sign-out while this was on its way: the count was the last person's.
         if (storedToken(ctx, e.appId) != token) return
+        visitorOnline = ChatRules.parseUnreadOnline(text) ?: false
         // An open chat has just shown them everything.
-        if (!screenOpen) setUnread(count)
+        if (!screenOpen) setUnread(count) else onMain { paintBubble() }
     }
 
     /** The owner may have switched the chat on or off while the app was away, and a reply may have come in. */
@@ -332,7 +337,7 @@ internal object LiveChat {
     }
 
     private fun paintBubble() {
-        bubbleIn(resumed?.get())?.update(unread + if (greetingPending) 1 else 0, config?.online == true)
+        bubbleIn(resumed?.get())?.update(unread + if (greetingPending) 1 else 0, config?.online == true || visitorOnline)
     }
 
     // ── The live red number ───────────────────────────────────────────────

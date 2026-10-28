@@ -234,6 +234,20 @@ internal object ChatRules {
         return if (mode == "only") hit else !hit
     }
 
+    /**
+     * Whether someone who answers THIS person is online, the affiliate who
+     * brought them included (4.15.0); null when the answer leaves it out (no
+     * affiliate brought them: the config's online decides).
+     */
+    fun parseUnreadOnline(text: String): Boolean? {
+        val json = try {
+            JSONObject(text)
+        } catch (e: Exception) {
+            return null
+        }
+        return if (json.has("online") && !json.isNull("online")) json.optBoolean("online") else null
+    }
+
     fun parseUnread(text: String): Int? {
         val json = try {
             JSONObject(text)

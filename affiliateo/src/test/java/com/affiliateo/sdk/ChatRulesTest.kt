@@ -226,6 +226,14 @@ class ChatRulesTest {
     }
 
     @Test
+    fun unreadCheckCanSayOnlineForThisPerson() {
+        assertEquals(true, ChatRules.parseUnreadOnline("""{"unread":0,"online":true}"""))
+        assertEquals(false, ChatRules.parseUnreadOnline("""{"unread":2,"online":false}"""))
+        assertEquals(null, ChatRules.parseUnreadOnline("""{"unread":1}"""))
+        assertEquals(3, ChatRules.parseUnread("""{"unread":3,"online":true}"""))
+    }
+
+    @Test
     fun boxTextSetInCodeGoesToTheChatPage() {
         val parts = fragment(ChatRules.chatUrl(env(), null, "android", "es", null, placeholder = ChatRules.placeholder("  Pregúntanos\n lo que sea ")))
         assertEquals("Pregúntanos lo que sea", parts["ph"])
