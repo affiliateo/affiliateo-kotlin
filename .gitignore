@@ -1,0 +1,6 @@
+# Build outputs (never committed)
+build/
+.gradle/
+local.properties
+.idea/
+*.iml
