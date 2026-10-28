@@ -243,6 +243,9 @@ Affiliateo.setChatBubblePadding(bottom = 72)
 
 // Your own look, over the dashboard's (4.15.0); leave out what the dashboard should decide
 Affiliateo.setChatBubbleLook(color = "#7C3AED", iconColor = "#FFFFFF", sendColor = "#007AFF", style = ChatBubbleStyle.GLASS, corner = ChatBubbleCorner.BOTTOM_LEFT, sizeDp = 56)
+
+// The message box text in your own words and language (4.15.0): pass your own translation
+Affiliateo.setChatPlaceholder(getString(R.string.chat_placeholder))
 ```
 
 - Nothing shows until your code calls `showChatBubble()` or `openChat()`, so

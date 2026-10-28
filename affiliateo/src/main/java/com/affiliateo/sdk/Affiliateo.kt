@@ -533,6 +533,17 @@ object Affiliateo {
     )
 
     /**
+     * The chat's message box text (4.15.0), in your own words and language,
+     * over the Live Chat settings in your dashboard: up to 60 characters.
+     * Pass your app's own translation; null goes back to the dashboard's.
+     *
+     * ```kotlin
+     * Affiliateo.setChatPlaceholder(getString(R.string.chat_placeholder))
+     * ```
+     */
+    fun setChatPlaceholder(text: String?) = LiveChat.setPlaceholder(ChatRules.placeholder(text))
+
+    /**
      * Open the chat from your own button (4.14.0), full screen over [activity].
      * Does nothing while Live Chat is off for this app (with debug = true it
      * says so in Logcat).

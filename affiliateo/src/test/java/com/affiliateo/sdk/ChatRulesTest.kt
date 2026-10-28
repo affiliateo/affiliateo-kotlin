@@ -226,6 +226,15 @@ class ChatRulesTest {
     }
 
     @Test
+    fun boxTextSetInCodeGoesToTheChatPage() {
+        val parts = fragment(ChatRules.chatUrl(env(), null, "android", "es", null, placeholder = ChatRules.placeholder("  Pregúntanos\n lo que sea ")))
+        assertEquals("Pregúntanos lo que sea", parts["ph"])
+        assertEquals(null, ChatRules.placeholder("   "))
+        assertEquals(60, ChatRules.placeholder("a".repeat(80))?.length)
+        assertEquals(null, fragment(ChatRules.chatUrl(env(), null, "android", "en", null))["ph"])
+    }
+
+    @Test
     fun sendColorSetInCodeGoesToTheChatPage() {
         val parts = fragment(ChatRules.chatUrl(env(), null, "android", "en", null, sendColor = "#007aff"))
         assertEquals("#007aff", parts["sc"])

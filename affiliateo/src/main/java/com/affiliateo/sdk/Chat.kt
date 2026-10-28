@@ -99,6 +99,8 @@ internal object LiveChat {
     private var bottomPaddingDp = 0
     /** The app's own look for the bubble (setChatBubbleLook), over the dashboard's. */
     private var look = ChatRules.BubbleLook()
+    /** The app's own message box text (setChatPlaceholder), over the dashboard's. */
+    private var placeholder: String? = null
     private var screenOpen = false
     /** The chat screen while it is up, so a sign-out can close it. */
     private var chatScreen: WeakReference<ChatActivity>? = null
@@ -172,6 +174,10 @@ internal object LiveChat {
     fun setLook(next: ChatRules.BubbleLook) = onMain {
         look = next
         placeBubble()
+    }
+
+    fun setPlaceholder(text: String?) = onMain {
+        placeholder = text
     }
 
     fun setBottomPadding(dp: Int) = onMain {
@@ -434,6 +440,7 @@ internal object LiveChat {
             language = Locale.getDefault().toLanguageTag(),
             theme = if (dark) "dark" else "light",
             sendColor = look.sendColor,
+            placeholder = placeholder,
         )
         // They see the greeting now; a new one counts again.
         config?.bubble?.greetingId?.let { prefs(activity).edit().putString(ChatRules.greetingKey(e.appId), it).apply() }
