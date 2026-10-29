@@ -228,6 +228,9 @@ internal object LiveChat {
      * seen belong to the phone, not the person: they stay.
      */
     fun forget() {
+        // First, on the caller's thread (4.15.1): an open chat screen saves no
+        // key it is handed from now on, even while it is still sliding away.
+        ChatSignOuts.bump()
         val e = env ?: return
         val ctx = Affiliateo.chatContext() ?: return
         prefs(ctx).edit().remove(ChatRules.tokenKey(e.appId)).apply()

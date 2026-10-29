@@ -27,6 +27,42 @@ class ChatRulesTest {
             kv[0] to URLDecoder.decode(kv.getOrElse(1) { "" }, "UTF-8")
         }
 
+    /** 4.15.1: a different signed-in person forgets the last person's thread; anonymous to signed-in keeps it. */
+    @Test
+    fun switchesPersonOnlyBetweenTwoSignedInPeople() {
+        assertTrue(ChatRules.switchesPerson("user-a", "user-b"))
+        assertFalse(ChatRules.switchesPerson("user-a", "user-a"))
+        assertFalse(ChatRules.switchesPerson(null, "user-a"))
+        assertFalse(ChatRules.switchesPerson("", "user-a"))
+    }
+
+    /** 4.15.1: the page keeps no key itself, so a reload gets the one the app saved since the screen opened. */
+    @Test
+    fun aReloadCarriesTheKeyTheAppSaved() {
+        val first = ChatRules.chatUrl(env(), null, "android", "en", "dark")
+        val again = ChatRules.reloadUrl(first, token)
+        assertEquals(token, fragment(again)["t"])
+        assertNull(fragment(again)["fresh"])
+        assertEquals("dark", fragment(again)["theme"])
+        assertEquals("user 1&2", fragment(again)["u"])
+        // A newer key replaces the one the screen opened with.
+        val newer = "lct_" + "B".repeat(43)
+        val replaced = ChatRules.reloadUrl(ChatRules.chatUrl(env(), token, "android", "en", null), newer)
+        assertEquals(newer, fragment(replaced)["t"])
+        assertEquals(1, URI(replaced).rawFragment.split("&").count { it.startsWith("t=") })
+        // No key saved (or not a key): only fresh=1 goes.
+        assertEquals(ChatRules.withoutFresh(first), ChatRules.reloadUrl(first, null))
+        assertEquals(ChatRules.withoutFresh(first), ChatRules.reloadUrl(first, "lct_bad"))
+    }
+
+    /** 4.15.1: a key handed over after a sign-out no longer matches the count the chat screen opened with. */
+    @Test
+    fun signOutCountMovesOnEverySignOut() {
+        val openedAt = ChatSignOuts.current
+        ChatSignOuts.bump()
+        assertEquals(openedAt + 1, ChatSignOuts.current)
+    }
+
     @Test
     fun tokenShape() {
         assertTrue(ChatRules.isToken(token))

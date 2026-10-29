@@ -87,6 +87,15 @@ internal object ChatRules {
 
     // ── Storage, the same key names as the React Native SDK ───────────────
 
+    /**
+     * Whether a sign-in switches this phone from one signed-in person to a
+     * DIFFERENT one (4.15.1). Then the last person's chat thread is forgotten
+     * first, as logout() does; signing in from anonymous (nobody before)
+     * keeps the person's own thread.
+     */
+    fun switchesPerson(previous: String?, next: String): Boolean =
+        !previous.isNullOrEmpty() && previous != next
+
     fun tokenKey(appId: String) = "affiliateo_chat_token_$appId"
     fun positionKey(appId: String) = "affiliateo_chat_pos_$appId"
     /** The server's last answer about the chat (4.15.0): the bubble shows from it at once on the next launch while a fresh one is asked for. */
@@ -295,6 +304,22 @@ internal object ChatRules {
     }
 
     /**
+     * The page again after its WebView had to start over (4.15.1): without
+     * fresh=1, and with the thread's key the app saved since the screen
+     * opened, over any older one. The page keeps nothing itself (its DOM
+     * storage is off), so a thread started on this screen comes back only
+     * this way. No key saved: only fresh=1 goes.
+     */
+    fun reloadUrl(url: String, savedToken: String?): String {
+        val page = withoutFresh(url)
+        val token = savedToken?.takeIf { isToken(it) } ?: return page
+        val hash = page.indexOf('#')
+        if (hash < 0) return page
+        val kept = page.substring(hash + 1).split("&").filter { it.isNotEmpty() && !it.startsWith("t=") }
+        return page.substring(0, hash + 1) + (kept + "t=${encode(token)}").joinToString("&")
+    }
+
+    /**
      * Whether the WebView may load this address itself. Anything else is a
      * link the business sent, which opens in the browser so the chat stays.
      */
@@ -334,4 +359,19 @@ internal object ChatRules {
 
     /** Like encodeURIComponent: a space is %20, never +. */
     fun encode(value: String): String = URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+}
+
+/**
+ * Counts sign-outs and switches of person (4.15.1), readable from any thread.
+ * The chat screen saves a thread key the page hands over only while the count
+ * is still the one it opened with, so a key can never outlive a sign-out,
+ * including during the screen's 250 ms slide-down, when isFinishing is still
+ * false. LiveChat.forget() bumps it before anything else.
+ */
+internal object ChatSignOuts {
+    private val count = java.util.concurrent.atomic.AtomicInteger(0)
+    val current: Int get() = count.get()
+    fun bump() {
+        count.incrementAndGet()
+    }
 }

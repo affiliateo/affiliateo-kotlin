@@ -18,7 +18,7 @@ In your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.github.affiliateo:affiliateo-kotlin:4.15.0")
+    implementation("com.github.affiliateo:affiliateo-kotlin:4.15.1")
 }
 ```
 
@@ -94,7 +94,8 @@ The same person then counts as one customer across their devices. After
 next (or nobody) isn't counted as the person who just left; everything already
 recorded stays with them. Tracking carries on as before: same device, same
 visitor id, same `obfuscatedAccountId`, no restart needed. If a different user
-signs in without a sign-out in between, the phone switches to them on its own.
+signs in without a sign-out in between, the phone switches to them on its own,
+and the last person's Live Chat thread is forgotten first (4.15.1).
 
 The SDK remembers the signed-in id and sends it again once per launch, and an
 `identify()` made before `configure()` is kept and sent once it has run. Ids

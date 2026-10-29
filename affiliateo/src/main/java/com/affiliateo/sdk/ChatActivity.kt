@@ -51,6 +51,9 @@ class ChatActivity : Activity() {
     private var webView: WebView? = null
     private var background = Color.WHITE
     private var leaving = false
+    // The sign-out count when this screen opened (4.15.1): a key the page
+    // hands over after a sign-out (or a switch of person) is not saved.
+    private var openedAt = ChatSignOuts.current
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
@@ -60,8 +63,9 @@ class ChatActivity : Activity() {
         url = intent.getStringExtra(EXTRA_URL) ?: return finish()
         apiUrl = intent.getStringExtra(EXTRA_API_URL) ?: return finish()
         appId = intent.getStringExtra(EXTRA_APP_ID) ?: return finish()
-        // Recreated (Android ended the app while it was away): the first load already happened.
-        if (savedInstanceState != null) url = ChatRules.withoutFresh(url)
+        // Recreated (Android ended the app while it was away): the first load
+        // already happened, and the thread it started is the key the app saved.
+        if (savedInstanceState != null) url = ChatRules.reloadUrl(url, LiveChat.storedToken(this, appId))
         LiveChat.chatOpened(this)
 
         background = if (dark) Color.parseColor("#111214") else Color.WHITE
@@ -159,7 +163,12 @@ class ChatActivity : Activity() {
         val web = WebView(this)
         web.setBackgroundColor(background)
         web.settings.javaScriptEnabled = true
-        web.settings.domStorageEnabled = true
+        // The page keeps nothing on the phone (4.15.1): no copy of the
+        // thread's key or of its last messages outlives a sign-out. The key
+        // lives in the SDK's own storage only, which logout() clears.
+        // (WebStorage.deleteOrigin would not clear localStorage, and
+        // deleteAllData would wipe the app's other web content too.)
+        web.settings.domStorageEnabled = false
         web.settings.setSupportMultipleWindows(false)
         web.settings.allowFileAccess = false
         web.settings.allowContentAccess = false
@@ -172,13 +181,20 @@ class ChatActivity : Activity() {
                 return true
             }
 
-            /** The page's process ended (memory pressure): start it again, without fresh=1. The page keeps the thread's token in its own storage too. */
+            /**
+             * The page's process ended (memory pressure): start it again,
+             * without fresh=1 and with the key the app saved since it opened
+             * (the page keeps none itself). Not once closing or signed out.
+             */
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
                 if (view === webView) {
                     sheet.removeView(view)
                     view.destroy()
                     webView = null
-                    if (!isFinishing) buildWebView()
+                    if (!isFinishing && !leaving && ChatSignOuts.current == openedAt) {
+                        url = ChatRules.reloadUrl(url, LiveChat.storedToken(this@ChatActivity, appId))
+                        buildWebView()
+                    }
                 }
                 return true
             }
@@ -190,8 +206,10 @@ class ChatActivity : Activity() {
     }
 
     internal fun received(json: String) {
-        // Closing (a sign-out among others): a late token is not kept.
-        if (isFinishing) return
+        // Closing (a sign-out among others): a late token is not kept. Not
+        // only once Android says so: the sheet slides down for 250 ms first
+        // (leaving), and a sign-out since this screen opened counts at once.
+        if (isFinishing || leaving || ChatSignOuts.current != openedAt) return
         // Only the chat page itself may speak.
         val current = webView?.url ?: return
         if (!ChatRules.isChatPage(current, apiUrl)) return

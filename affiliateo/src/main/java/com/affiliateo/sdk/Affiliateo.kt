@@ -158,7 +158,12 @@ object Affiliateo {
         // wins, except a sign-in while opted out, which does nothing.
         val storedUser = AffiliateoUserId.usable(prefs.getString(USER_ID_KEY, null))
         val storedHash = if (storedUser == null) null else prefs.getString(EMAIL_HASH_KEY, null)
+        // A sign-out, or a sign-in by a different person, made before
+        // configure() could not reach the Live Chat thread yet: it is
+        // forgotten once the chat is installed below (4.15.1).
+        var forgetChatNow = false
         if (userTouched && !(optedOut && userId != null)) {
+            forgetChatNow = logoutPending || ChatRules.switchesPerson(storedUser, userId ?: "")
             // The saved free access answer could not be cleared before there was
             // a context: forget it now when that call signed out or switched user.
             if (logoutPending || userId != storedUser) {
@@ -177,6 +182,7 @@ object Affiliateo {
         // Live Chat (4.14.0) follows the screens itself, opted out or not: the
         // chat still works while opted out, it only leaves the ids out.
         (context.applicationContext as? Application)?.let { LiveChat.install(it) }
+        if (forgetChatNow) LiveChat.forget()
 
         if (optedOut) {
             log("blocked: opted out (call optIn() to re-enable)")
@@ -666,6 +672,12 @@ object Affiliateo {
         }
         val hash = AffiliateoEmail.sha256Hex(email)
         userTouched = true
+        // A DIFFERENT person signing in on this phone (4.15.1): the last
+        // person's Live Chat thread was theirs, so it goes first, exactly as on
+        // logout(). Signing in from anonymous keeps the person's own thread.
+        // (Before configure() there is no thread to reach: configure forgets
+        // it then.)
+        if (ChatRules.switchesPerson(this.userId, uid)) LiveChat.forget()
         if (this.userId != uid) {
             // Somebody else: their own email (or none), and no free access
             // answer that belonged to the person before.

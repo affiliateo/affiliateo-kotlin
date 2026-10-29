@@ -10,6 +10,22 @@ plugins {
     id("maven-publish")
 }
 
+// 4.15.1: Live Chat privacy on shared phones. identify() with a different
+//         user (no logout() in between) forgets the last person's chat first,
+//         as logout() does; signing in from anonymous keeps the person's own
+//         thread, and a sign-out or switch made before configure() is caught
+//         up there. The chat screen saves a thread key the page hands over
+//         only while nobody signed out since it opened (its 250 ms slide-down
+//         included). The chat page keeps nothing in the WebView's storage
+//         (DOM storage is off), so no copy of the key or of the last messages
+//         outlives logout(); a page that has to start over (memory pressure,
+//         or Android ending the app) gets the key the app saved instead.
+// 4.15.0: Live Chat opens as a sheet over the dimmed app, the owner's "Glass"
+//         bubble style, setChatBubblePadding(bottom), setChatBubbleLook
+//         (color, icon color, send color, style, corner, size),
+//         setChatPlaceholder(text), the bubble at once on launch from the last
+//         answer kept, and the green dot when the affiliate who brought this
+//         person is online.
 // 4.14.2: Live Chat's bubble draws its speech bubble at 60% of the circle
 //         (it was half), as the website's bubble now does. logout() and
 //         reset() forget the person's chat (its token, red number and open
@@ -85,7 +101,7 @@ plugins {
 // install (Meta / TikTok / Google Ads) gets its source labelled server-side
 // with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-version = "4.15.0"
+version = "4.15.1"
 
 android {
     namespace = "com.affiliateo.sdk"
