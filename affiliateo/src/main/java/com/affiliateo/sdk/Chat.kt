@@ -46,7 +46,7 @@ import java.util.Locale
  * Live Chat (4.14.0): the app's users chat in real time with the business,
  * which answers from the Live Chat inbox in its Affiliateo dashboard.
  *
- *     Affiliateo.showChatBubble()       the bubble on every screen
+ *     Affiliateo.showChatBubble()       the bubble on the app's pages
  *     Affiliateo.openChat(activity)     or open it from your own button
  *
  * Nothing shows until the app calls one of them: an app must not grow a
@@ -63,8 +63,10 @@ import java.util.Locale
  * library for one).
  *
  * The bubble is a view the SDK adds on top of each screen's content
- * (android.R.id.content) as it comes up, so a dialog or a new screen the app
- * opens covers it. The visitor's key to their thread (a token the server
+ * (android.R.id.content) as it comes up, never a window of its own, so a
+ * dialog, a bottom sheet or a new screen the app opens covers it. An app that
+ * draws its own sheets inside its Compose content gives the bubble a page
+ * layer under them (Affiliateo.chatBubbleLayer, 4.15.2). The visitor's key to their thread (a token the server
  * hands out with their first message) is kept in the SDK's own
  * SharedPreferences, like everything else it keeps. Affiliateo.logout()
  * drops it (4.14.2), so the next person on the phone starts a new thread.
@@ -394,22 +396,74 @@ internal object LiveChat {
 
     // ── The bubble ────────────────────────────────────────────────────────
 
-    private fun bubbleIn(activity: Activity?): ChatBubbleView? =
-        activity?.findViewById<ViewGroup>(android.R.id.content)?.findViewWithTag(BUBBLE_TAG)
+    private fun bubbleIn(activity: Activity?): ChatBubbleView? {
+        if (activity == null) return null
+        layerOf(activity)?.findViewWithTag<ChatBubbleView>(BUBBLE_TAG)?.let { return it }
+        return activity.findViewById<ViewGroup>(android.R.id.content)?.findViewWithTag(BUBBLE_TAG)
+    }
 
-    /** Puts the bubble on the screen in front, or takes it off, to match what the app asked, what the server said and which screen this is. */
+    /** The page layers apps gave the bubble (Affiliateo.chatBubbleLayer), newest last. */
+    private val layers = mutableListOf<WeakReference<FrameLayout>>()
+
+    /** A layer for the app's pages that the bubble lives in (4.15.2, review E1); see Affiliateo.chatBubbleLayer. */
+    fun bubbleLayer(context: Context): FrameLayout = FrameLayout(context).also { layer ->
+        layers.removeAll { it.get() == null }
+        layers.add(WeakReference(layer))
+        // Only the bubble takes touches: the layer itself lets them through.
+        layer.isClickable = false
+        layer.isFocusable = false
+        layer.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) = onMain { placeBubble() }
+            override fun onViewDetachedFromWindow(v: View) {}
+        })
+    }
+
+    /** The activity a view's context belongs to (Compose hands AndroidView a wrapped one). */
+    private fun activityOf(context: Context): Activity? {
+        var c: Context? = context
+        while (c is android.content.ContextWrapper) {
+            if (c is Activity) return c
+            c = c.baseContext
+        }
+        return null
+    }
+
+    /** This screen's page layer, when the app put one on it. */
+    private fun layerOf(activity: Activity): FrameLayout? =
+        layers.mapNotNull { it.get() }.lastOrNull { it.isAttachedToWindow && activityOf(it.context) === activity }
+
+    /**
+     * Puts the bubble on the screen in front, or takes it off, to match what
+     * the app asked, what the server said and which screen this is.
+     *
+     * THE BUBBLE IS FOR THE APP'S PAGES (4.15.2, review E1). It is a view in the
+     * screen's own window, never a window of its own, so dialogs, bottom
+     * sheets and screens with windows of their own cover it. It goes in the
+     * app's page layer when the app put one on this screen (chatBubbleLayer),
+     * so sheets and covers the app draws in its own Compose tree cover it too;
+     * otherwise on top of the screen's content, as before.
+     */
     private fun placeBubble() {
         val activity = resumed?.get() ?: return
         if (activity is ChatActivity || activity.isFinishing) return
+        // Never on another library's screen over the app's own (Play Billing's
+        // purchase sheet): the bubble stays on the app's screen under it (review E16).
+        if (!ChatRules.hostsBubble(activity.javaClass.name)) return
         val content = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
-        var existing = content.findViewWithTag<ChatBubbleView>(BUBBLE_TAG)
+        val layer = layerOf(activity)
+        val container: ViewGroup = layer ?: content
+        // One left on top of the content from before the layer came goes.
+        if (layer != null) {
+            (0 until content.childCount).map { content.getChildAt(it) }.filter { it.tag == BUBBLE_TAG }.forEach { content.removeView(it) }
+        }
+        var existing = (0 until container.childCount).map { container.getChildAt(it) }.firstOrNull { it.tag == BUBBLE_TAG } as? ChatBubbleView
         val cfg = config
         val e = env
         val style = ChatRules.applying(look, cfg?.bubble ?: ChatRules.Bubble.STANDARD)
         if (!wantsBubble || screenOpen || e == null || cfg == null || !cfg.enabled || !cfg.showBubble ||
             !ChatRules.bubbleShowsOn(style.pageMode, style.pageRules, currentScreen)
         ) {
-            existing?.let { content.removeView(it) }
+            existing?.let { container.removeView(it) }
             stopPolling()
             return
         }
@@ -418,13 +472,13 @@ internal object LiveChat {
         val glass = style.style == "glass"
         val colors = Pair(style.color, style.iconColor)
         if (existing != null && (existing.sizeDp != size || existing.position != style.position || existing.glass != glass || existing.colors != colors)) {
-            content.removeView(existing)
+            container.removeView(existing)
             existing = null
         }
         val bubble = existing ?: ChatBubbleView(activity, e.appId, size, style.position, glass, colors) { open(activity) }.also {
             it.tag = BUBBLE_TAG
             it.bottomPaddingDp = bottomPaddingDp
-            content.addView(it)
+            container.addView(it)
         }
         if (bubble.bottomPaddingDp != bottomPaddingDp) {
             bubble.bottomPaddingDp = bottomPaddingDp
@@ -518,6 +572,8 @@ internal class ChatBubbleView(
 
     private val pill = TextView(context)
     private val dot = View(context)
+    /** What TalkBack says, in the person's language (4.15.2, review E14). */
+    private val words = ChatRules.chatWords(Locale.getDefault().toLanguageTag())
 
     /**
      * Distance of the circle from the content's right and bottom edges, in dp,
@@ -537,7 +593,7 @@ internal class ChatBubbleView(
         clipToPadding = false
         isClickable = true
         isFocusable = true
-        contentDescription = "Chat"
+        contentDescription = words.chat
         // The bubble casts the shadow itself, shaped like the circle: a
         // shadow cast by a view inside it would be cut off square at this
         // view's edges.
@@ -562,7 +618,9 @@ internal class ChatBubbleView(
         )
 
         pill.setTextColor(Color.WHITE)
-        pill.setTextSize(TypedValue.COMPLEX_UNIT_SP, badge.pillFont)
+        // In dp like the pill around it (4.15.2, review E19): in sp a large font
+        // setting grew the number out of its pill. The other copies do the same.
+        pill.setTextSize(TypedValue.COMPLEX_UNIT_DIP, badge.pillFont)
         pill.typeface = Typeface.DEFAULT_BOLD
         pill.gravity = Gravity.CENTER
         pill.minWidth = dp(badge.pillHeight)
@@ -607,11 +665,11 @@ internal class ChatBubbleView(
             pill.text = text
             pill.visibility = VISIBLE
             dot.visibility = GONE
-            contentDescription = "Chat, $text"
+            contentDescription = words.unread(unread)
         } else {
             pill.visibility = GONE
             dot.visibility = if (online) VISIBLE else GONE
-            contentDescription = "Chat"
+            contentDescription = words.chat
         }
     }
 

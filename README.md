@@ -18,7 +18,7 @@ In your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.github.affiliateo:affiliateo-kotlin:4.15.1")
+    implementation("com.github.affiliateo:affiliateo-kotlin:4.15.2")
 }
 ```
 
@@ -252,9 +252,22 @@ Affiliateo.setChatPlaceholder(getString(R.string.chat_placeholder))
 - Nothing shows until your code calls `showChatBubble()` or `openChat()`, so
   the store reviewer sees every feature your app has. Nothing shows either
   while Live Chat is off for this app in your dashboard.
-- The bubble sits on top of each screen's content, Compose or Views (a
-  dialog you open covers it). People can drag it and it stays where they
-  leave it. It shows a red number for replies they have not read (asked for
+- The bubble is for your app's pages, Compose or Views: dialogs, bottom
+  sheets and screens that open in a window of their own cover it. If your app
+  draws its own sheets or covers inside its Compose content, put
+  `Affiliateo.chatBubbleLayer()` in your page layer, under them, and the
+  bubble lives there so they cover it too (4.15.2):
+
+  ```kotlin
+  Box(Modifier.fillMaxSize()) {
+      YourPages()
+      AndroidView(factory = { Affiliateo.chatBubbleLayer(it) }, modifier = Modifier.fillMaxSize())
+      YourSheetsAndCovers()
+  }
+  ```
+
+  People can drag it and it stays where they leave it. TalkBack reads it in
+  the phone's language, with the unread count. It shows a red number for replies they have not read (asked for
   every 20 seconds while the bubble is on screen), and a green dot while
   someone on your team is online. On launch it shows at once from the last
   answer the phone kept, then checks with the server (4.15.0).

@@ -22,6 +22,8 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import java.lang.ref.WeakReference
 
 /**
@@ -172,7 +174,7 @@ class ChatActivity : Activity() {
         web.settings.setSupportMultipleWindows(false)
         web.settings.allowFileAccess = false
         web.settings.allowContentAccess = false
-        web.addJavascriptInterface(Bridge(this), ChatRules.BRIDGE_NAME)
+        addBridge(web)
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val target = request.url.toString()
@@ -203,6 +205,26 @@ class ChatActivity : Activity() {
         webView = web
         web.loadUrl(url)
         url = ChatRules.withoutFresh(url)
+    }
+
+    /**
+     * window.AffiliateoChatBridge for the chat page. ONLY THE CHAT PAGE ITSELF
+     * (4.15.2, review E15): where the WebView can, the bridge is offered to
+     * the page's own origin only and answers its main frame only (androidx
+     * WebMessageListener), so a frame inside the page cannot reach the SDK.
+     * An older WebView gets the plain JavaScript interface, still checked
+     * against the page's address in received().
+     */
+    private fun addBridge(web: WebView) {
+        val origin = ChatRules.pageOrigin(apiUrl)
+        if (origin != null && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            WebViewCompat.addWebMessageListener(web, ChatRules.BRIDGE_NAME, setOf(origin)) { _, message, _, isMainFrame, _ ->
+                val json = message.data
+                if (isMainFrame && json != null) received(json)
+            }
+        } else {
+            web.addJavascriptInterface(Bridge(this), ChatRules.BRIDGE_NAME)
+        }
     }
 
     internal fun received(json: String) {

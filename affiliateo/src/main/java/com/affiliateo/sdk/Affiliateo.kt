@@ -498,6 +498,31 @@ object Affiliateo {
     fun hideChatBubble() = LiveChat.hideBubble()
 
     /**
+     * A layer for your pages that the chat bubble lives in (4.15.2), for an app
+     * that draws its own sheets, covers or dialogs inside its Compose content.
+     *
+     * The bubble is for your app's pages: dialogs, bottom sheets and screens
+     * that open in a window of their own (a Dialog, Material's
+     * ModalBottomSheet, another activity) always cover it. A sheet your app
+     * draws in its own Compose tree is part of the same screen as the bubble,
+     * so the bubble would sit on top of it. Put this layer in your page layer,
+     * under where those sheets are drawn, and the bubble goes there instead:
+     * what you draw above the layer covers it.
+     *
+     * ```kotlin
+     * Box(Modifier.fillMaxSize()) {
+     *     YourPages()
+     *     AndroidView(factory = { Affiliateo.chatBubbleLayer(it) }, modifier = Modifier.fillMaxSize())
+     *     YourSheetsAndCovers()
+     * }
+     * ```
+     *
+     * The layer takes no touches of its own (only the bubble does). Without it,
+     * the bubble sits on top of each screen's content, as before.
+     */
+    fun chatBubbleLayer(context: android.content.Context): android.widget.FrameLayout = LiveChat.bubbleLayer(context)
+
+    /**
      * Keep the chat bubble above your app's own bottom bar (4.15.0): a tab
      * bar or a floating button. The bubble starts this many dp above the
      * system bars and is never dragged below them.

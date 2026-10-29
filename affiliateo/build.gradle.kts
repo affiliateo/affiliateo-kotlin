@@ -10,6 +10,16 @@ plugins {
     id("maven-publish")
 }
 
+// 4.15.2: the chat bubble is for the app's pages. It was always a view in the
+//         screen's own window (dialogs, bottom sheets and other screens cover
+//         it); Affiliateo.chatBubbleLayer(context) now gives an app that
+//         draws its own sheets or covers in its Compose content a page layer
+//         under them for the bubble. Never on another library's screen over
+//         the app's (Play Billing's purchase sheet). TalkBack says the bubble
+//         in the phone's language (16 languages) with the unread count; the
+//         red number keeps its size whatever the font setting. Only the chat
+//         page's own main frame can talk to the SDK (androidx.webkit's
+//         WebMessageListener, new dependency androidx.webkit 1.11.0).
 // 4.15.1: Live Chat privacy on shared phones. identify() with a different
 //         user (no logout() in between) forgets the last person's chat first,
 //         as logout() does; signing in from anonymous keeps the person's own
@@ -101,7 +111,7 @@ plugins {
 // install (Meta / TikTok / Google Ads) gets its source labelled server-side
 // with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-version = "4.15.1"
+version = "4.15.2"
 
 android {
     namespace = "com.affiliateo.sdk"
@@ -155,6 +165,9 @@ dependencies {
     // Google's Play Install Referrer — how the Play Store hands the app the
     // link (and its utm/click-id tags) that installed it. Tiny (~20KB).
     implementation("com.android.installreferrer:installreferrer:2.2")
+    // The chat page's bridge for its own main frame only (4.15.2,
+    // WebViewCompat.addWebMessageListener). Small, AndroidX's own.
+    implementation("androidx.webkit:webkit:1.11.0")
     // Compose runtime is compileOnly: ComposeHelpers.kt compiles cleanly
     // here, but consumers without Compose in their app aren't forced to
     // pull in the (large) Compose runtime they don't use. Consumers WITH

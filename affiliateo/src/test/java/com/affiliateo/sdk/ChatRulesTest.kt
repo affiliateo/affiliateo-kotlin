@@ -306,4 +306,37 @@ class ChatRulesTest {
         assertEquals(ChatRules.BadgeMetrics(17f, 9.5f, 4f, 3f, 14f, 2f, 1.5f), ChatRules.badgeMetrics(48))
         assertEquals(ChatRules.BadgeMetrics(23f, 12.5f, 6f, 5f, 18f, 2f, 2f), ChatRules.badgeMetrics(64))
     }
+
+    // ── 4.15.2 ────────────────────────────────────────────────────────────
+
+    @Test
+    fun theBubbleSpeaksThePersonsLanguage() {
+        assertEquals("Fermer le chat", ChatRules.chatWords("fr-FR").close)
+        assertEquals("Chat, 3 não lidas", ChatRules.chatWords("pt-BR").unread(3))
+        assertEquals("聊天", ChatRules.chatWords("zh-Hans-CN").chat)
+        assertEquals(16, ChatRules.CHAT_WORDS.size)
+    }
+
+    @Test
+    fun anyOtherLanguageIsEnglish() {
+        assertEquals(ChatRules.chatWords("en"), ChatRules.chatWords("sv-SE"))
+        assertEquals("Chat, 2 unread", ChatRules.chatWords("").unread(2))
+    }
+
+    @Test
+    fun theBubbleNeverGoesOnAnotherLibrarysScreen() {
+        assertFalse(ChatRules.hostsBubble("com.android.billingclient.api.ProxyBillingActivity"))
+        assertFalse(ChatRules.hostsBubble("com.google.android.gms.auth.api.signin.internal.SignInHubActivity"))
+        assertFalse(ChatRules.hostsBubble("androidx.browser.customtabs.CustomTabsActivity"))
+        assertTrue(ChatRules.hostsBubble("com.nicogs.copydraw.MainActivity"))
+        assertTrue(ChatRules.hostsBubble("com.example.app.ui.HomeActivity"))
+    }
+
+    @Test
+    fun onlyTheChatPagesOwnOriginMayTalkToTheSdk() {
+        assertEquals("https://affiliateo.com", ChatRules.pageOrigin("https://affiliateo.com/"))
+        assertEquals("http://10.0.2.2:3000", ChatRules.pageOrigin("http://10.0.2.2:3000"))
+        assertNull(ChatRules.pageOrigin("file:///sdcard/x"))
+        assertNull(ChatRules.pageOrigin("not a url"))
+    }
 }

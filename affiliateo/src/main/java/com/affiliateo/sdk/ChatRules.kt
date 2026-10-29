@@ -353,6 +353,78 @@ internal object ChatRules {
         else -> unread.toString()
     }
 
+    // ── The bubble's words (4.15.2) ───────────────────────────────────────
+
+    /**
+     * What TalkBack says for the bubble, in the person's language: the 16
+     * languages Affiliateo speaks, English for any other (review E14). The same
+     * words as the website's chat.js and the React Native and Swift SDKs.
+     */
+    data class ChatWords(val chat: String, val close: String, val unreadPattern: String) {
+        fun unread(count: Int): String = unreadPattern.replace("{n}", count.toString())
+    }
+
+    val CHAT_WORDS: Map<String, ChatWords> = mapOf(
+        "en" to ChatWords("Chat", "Close chat", "Chat, {n} unread"),
+        "ar" to ChatWords("الدردشة", "إغلاق الدردشة", "الدردشة، {n} غير مقروءة"),
+        "de" to ChatWords("Chat", "Chat schließen", "Chat, {n} ungelesen"),
+        "es" to ChatWords("Chat", "Cerrar chat", "Chat, {n} sin leer"),
+        "fr" to ChatWords("Chat", "Fermer le chat", "Chat, {n} non lus"),
+        "hi" to ChatWords("चैट", "चैट बंद करें", "चैट, {n} अपठित"),
+        "it" to ChatWords("Chat", "Chiudi chat", "Chat, {n} non letti"),
+        "ja" to ChatWords("チャット", "チャットを閉じる", "チャット、未読 {n} 件"),
+        "ko" to ChatWords("채팅", "채팅 닫기", "채팅, 읽지 않음 {n}개"),
+        "nl" to ChatWords("Chat", "Chat sluiten", "Chat, {n} ongelezen"),
+        "pl" to ChatWords("Czat", "Zamknij czat", "Czat, nieprzeczytane: {n}"),
+        "pt" to ChatWords("Chat", "Fechar chat", "Chat, {n} não lidas"),
+        "ru" to ChatWords("Чат", "Закрыть чат", "Чат, непрочитанных: {n}"),
+        "tr" to ChatWords("Sohbet", "Sohbeti kapat", "Sohbet, {n} okunmamış"),
+        "vi" to ChatWords("Trò chuyện", "Đóng trò chuyện", "Trò chuyện, {n} chưa đọc"),
+        "zh" to ChatWords("聊天", "关闭聊天", "聊天，{n} 条未读"),
+    )
+
+    /** The words for a language tag ("pt-BR", "zh-Hans-CN"): its first two letters. */
+    fun chatWords(languageTag: String): ChatWords =
+        CHAT_WORDS[languageTag.lowercase().take(2)] ?: CHAT_WORDS.getValue("en")
+
+    // ── Where the bubble goes (4.15.2) ────────────────────────────────────
+
+    /**
+     * Activities of other libraries that open over the app's own screens: the
+     * bubble never goes on them (review E16). Play Billing's purchase screen
+     * is the one that matters; the bubble stays on the app's screen under it,
+     * which that screen's window covers.
+     */
+    private val FOREIGN_ACTIVITY_PREFIXES = listOf(
+        "com.android.billingclient.",
+        "com.google.android.gms.",
+        "com.google.android.play.",
+        "com.google.android.finsky.",
+        "androidx.browser.",
+        "com.facebook.",
+        "com.revenuecat.",
+    )
+
+    /** Whether the bubble may go on this activity (by its class name). */
+    fun hostsBubble(activityClassName: String): Boolean =
+        FOREIGN_ACTIVITY_PREFIXES.none { activityClassName.startsWith(it) }
+
+    /**
+     * The origin of the chat page (scheme, host and port), the only one whose
+     * main frame may talk to the SDK (review E15); null for anything odd.
+     */
+    fun pageOrigin(apiUrl: String): String? {
+        val uri = try {
+            java.net.URI(base(apiUrl))
+        } catch (e: Exception) {
+            return null
+        }
+        val scheme = uri.scheme?.lowercase() ?: return null
+        val host = uri.host ?: return null
+        if (scheme != "https" && scheme != "http") return null
+        return if (uri.port == -1) "$scheme://$host" else "$scheme://$host:${uri.port}"
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────
 
     private fun base(apiUrl: String) = apiUrl.trimEnd('/')
