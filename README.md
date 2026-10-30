@@ -18,7 +18,7 @@ In your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.github.affiliateo:affiliateo-kotlin:4.15.2")
+    implementation("com.github.affiliateo:affiliateo-kotlin:4.15.4")
 }
 ```
 
@@ -281,9 +281,10 @@ Affiliateo.setChatPlaceholder(getString(R.string.chat_placeholder))
   in a sheet that slides up over the dimmed app (4.15.0; it was full screen),
   declared in the SDK's own manifest: nothing to add to yours. Back, the
   page's close button or a tap on the app around it closes it, and links you
-  send open in the browser.
+  send open in the browser when the person taps them (4.15.4).
 - The person needs no account. Their first message opens a thread, and the
-  key to it is kept on the phone. Your inbox labels the thread with the
+  key to it is kept on the phone, in the app's no-backup folder, so it never
+  goes into a backup or to a new phone (4.15.4). Your inbox labels the thread with the
   device, the Affiliateo visitor and, after `identify()`, your user id; none
   of them while the person has opted out.
 - Google Play Data safety: chat messages are **Messages, Other in-app

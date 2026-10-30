@@ -67,9 +67,10 @@ import java.util.Locale
  * dialog, a bottom sheet or a new screen the app opens covers it. An app that
  * draws its own sheets inside its Compose content gives the bubble a page
  * layer under them (Affiliateo.chatBubbleLayer, 4.15.2). The visitor's key to their thread (a token the server
- * hands out with their first message) is kept in the SDK's own
- * SharedPreferences, like everything else it keeps. Affiliateo.logout()
- * drops it (4.14.2), so the next person on the phone starts a new thread.
+ * hands out with their first message) is kept in a file in the app's
+ * no-backup folder (4.15.4, review S18; ChatTokenStore), never in a backup.
+ * Affiliateo.logout() drops it (4.14.2), so the next person on the phone
+ * starts a new thread.
  */
 internal object LiveChat {
     private const val LOG_TAG = "Affiliateo"
@@ -235,7 +236,7 @@ internal object LiveChat {
         ChatSignOuts.bump()
         val e = env ?: return
         val ctx = Affiliateo.chatContext() ?: return
-        prefs(ctx).edit().remove(ChatRules.tokenKey(e.appId)).apply()
+        ChatTokenStore.of(ctx).clear(e.appId)
         onMain {
             stopPolling()
             unreadCheckedAt = 0L
@@ -367,15 +368,14 @@ internal object LiveChat {
         poll = null
     }
 
-    // ── Token, greeting and position, in the SDK's SharedPreferences ─────
+    // ── Token (ChatTokenStore), greeting and position (SharedPreferences) ──
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    fun storedToken(context: Context, appId: String): String? =
-        prefs(context).getString(ChatRules.tokenKey(appId), null)?.takeIf { ChatRules.isToken(it) }
+    fun storedToken(context: Context, appId: String): String? = ChatTokenStore.of(context).token(appId)
 
     fun saveToken(context: Context, appId: String, token: String) {
-        if (ChatRules.isToken(token)) prefs(context).edit().putString(ChatRules.tokenKey(appId), token).apply()
+        ChatTokenStore.of(context).save(appId, token)
     }
 
     /** Where the person left the bubble, in dp from the right and bottom: the React Native bubble's {"x":..,"y":..}. */

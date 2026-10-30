@@ -10,6 +10,17 @@ plugins {
     id("maven-publish")
 }
 
+// 4.15.4: the chat sheet's links, frames and thread key (review S18). A link
+//         leaves the sheet only when the person taps it (never for a script
+//         or a redirect), and only to the browser, mail or phone app. Only
+//         this app's own chat page (exactly /embed/chat/{appId} on
+//         Affiliateo's origin) loads in the sheet and talks to the SDK, and
+//         frames the page asks for load only from that origin. On a WebView
+//         too old for WebMessageListener, the bridge answers only the chat
+//         page's main frame (a random key only that frame gets). The thread
+//         key moved from SharedPreferences (which Auto Backup copies) to a
+//         file in the no-backup folder; a key an older version kept moves
+//         over once and is deleted.
 // 4.15.2: the chat bubble is for the app's pages. It was always a view in the
 //         screen's own window (dialogs, bottom sheets and other screens cover
 //         it); Affiliateo.chatBubbleLayer(context) now gives an app that
@@ -111,7 +122,7 @@ plugins {
 // install (Meta / TikTok / Google Ads) gets its source labelled server-side
 // with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-version = "4.15.2"
+version = "4.15.4"
 
 android {
     namespace = "com.affiliateo.sdk"

@@ -20,6 +20,12 @@ internal object ChatRules {
     const val UNREAD_MAX_AGE_MS = 30_000L
     /** The name the chat page posts to: window.AffiliateoChatBridge.postMessage. */
     const val BRIDGE_NAME = "AffiliateoChatBridge"
+    /**
+     * An older WebView's plain JavaScript interface (4.15.4, review S18). It
+     * reaches every frame, so it answers only messages that carry the key
+     * the SDK hands the chat page's main frame alone (fallbackBridgeScript).
+     */
+    const val FALLBACK_BRIDGE_NAME = "__affiliateoChatNative"
 
     /** What Live Chat needs to know about this install. The ids are labels for the business's inbox, never credentials. */
     data class Env(
@@ -96,7 +102,20 @@ internal object ChatRules {
     fun switchesPerson(previous: String?, next: String): Boolean =
         !previous.isNullOrEmpty() && previous != next
 
+    /** Where versions before 4.15.4 kept the thread key in SharedPreferences; ChatTokenStore moves a key found there. */
     fun tokenKey(appId: String) = "affiliateo_chat_token_$appId"
+
+    /**
+     * The file in the no-backup folder that holds this app's thread key
+     * (4.15.4, review S18): the app id itself when it is plain letters,
+     * digits, dots, dashes and underscores, its SHA-256 otherwise.
+     */
+    fun tokenFileName(appId: String): String {
+        val plain = appId.isNotEmpty() && appId.length <= 100 && appId.all { it.isLetterOrDigit() && it.code < 128 || it in "._-" }
+        if (plain) return "chat_token_$appId"
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(appId.toByteArray(Charsets.UTF_8))
+        return "chat_token_" + digest.joinToString("") { "%02x".format(it) }
+    }
     fun positionKey(appId: String) = "affiliateo_chat_pos_$appId"
     /** The server's last answer about the chat (4.15.0): the bubble shows from it at once on the next launch while a fresh one is asked for. */
     fun configKey(appId: String) = "affiliateo_chat_config_$appId"
@@ -320,11 +339,114 @@ internal object ChatRules {
     }
 
     /**
-     * Whether the WebView may load this address itself. Anything else is a
-     * link the business sent, which opens in the browser so the chat stays.
+     * Whether this is THIS app's own chat page (4.15.4, review S18): on the
+     * chat's origin, at exactly /embed/chat/{appId}. Another app's chat page
+     * is not, so it never loads in the sheet, and never hands over a key that
+     * would replace this person's.
      */
-    fun isChatPage(url: String, apiUrl: String): Boolean =
-        url == "about:blank" || url.startsWith("${base(apiUrl)}/embed/chat/")
+    fun isChatPage(url: String, apiUrl: String, appId: String): Boolean {
+        if (!isChatOrigin(url, apiUrl)) return false
+        val expected = rawPath("${base(apiUrl)}/embed/chat/${encode(appId)}") ?: return false
+        val path = rawPath(url) ?: return false
+        return path == expected || path == "$expected/"
+    }
+
+    /** Whether the address is on the chat's origin: the scheme, host and port of apiUrl. */
+    fun isChatOrigin(url: String, apiUrl: String): Boolean {
+        val origin = originOf(base(apiUrl)) ?: return false
+        return originOf(url) == origin
+    }
+
+    /** scheme://host[:port] of an http(s) address, the default port left out; null for anything else. */
+    private fun originOf(url: String): String? {
+        val uri = try {
+            java.net.URI(url)
+        } catch (e: Exception) {
+            return null
+        }
+        val scheme = uri.scheme?.lowercase() ?: return null
+        val host = uri.host?.lowercase() ?: return null
+        if (scheme != "https" && scheme != "http") return null
+        val port = when {
+            uri.port == -1 -> -1
+            scheme == "https" && uri.port == 443 -> -1
+            scheme == "http" && uri.port == 80 -> -1
+            else -> uri.port
+        }
+        return if (port == -1) "$scheme://$host" else "$scheme://$host:$port"
+    }
+
+    /** The path, decoded once (java.net.URI.getPath), or null. */
+    private fun rawPath(url: String): String? = try {
+        java.net.URI(url).path
+    } catch (e: Exception) {
+        null
+    }
+
+    // ── What the chat sheet loads (4.15.4, review S18) ─────────────────────
+
+    /** What the chat sheet does with a navigation the page asks for. */
+    enum class Navigation {
+        /** It loads in the sheet. */
+        LOAD,
+        /** A link the person tapped: it opens in the browser, the mail app or the phone app. */
+        OPEN_OUTSIDE,
+        /** Nothing happens. */
+        BLOCK,
+    }
+
+    /**
+     * The sheet's rules for a navigation:
+     * - the page itself (mainFrame) loads only this app's own chat page;
+     * - a frame inside it loads only from the chat's origin (and Cloudflare's
+     *   challenge frame, which only shows while Cloudflare checks a visitor
+     *   before serving the chat page);
+     * - anything else leaves the sheet only as a link the person TAPPED (web,
+     *   email or phone), never for a script or a redirect.
+     */
+    fun navigation(url: String, mainFrame: Boolean, tapped: Boolean, apiUrl: String, appId: String): Navigation {
+        if (!mainFrame) {
+            val inside = url == "about:blank" || url == "about:srcdoc" || isChatOrigin(url, apiUrl) || isCloudflareChallenge(url)
+            return if (inside) Navigation.LOAD else Navigation.BLOCK
+        }
+        if (url == "about:blank" || isChatPage(url, apiUrl, appId)) return Navigation.LOAD
+        return if (tapped && opensOutside(url)) Navigation.OPEN_OUTSIDE else Navigation.BLOCK
+    }
+
+    /** The links the sheet hands to the phone: web pages, email and phone numbers. */
+    fun opensOutside(url: String): Boolean {
+        val scheme = url.substringBefore(':', "").lowercase()
+        return scheme in setOf("http", "https", "mailto", "tel")
+    }
+
+    /** Cloudflare's own challenge frame (https://challenges.cloudflare.com). */
+    fun isCloudflareChallenge(url: String): Boolean = originOf(url) == "https://challenges.cloudflare.com"
+
+    /**
+     * What the SDK runs in the chat page's main frame on an older WebView
+     * (4.15.4, review S18): window.AffiliateoChatBridge for the page, which
+     * passes each message to the plain interface with `key`. Frames inside
+     * the page see the plain interface too, but never the key. The script
+     * first checks the document it runs in is on the chat's origin, so the
+     * key never reaches a page that took the chat page's place meanwhile.
+     * Null when apiUrl has no http(s) origin.
+     */
+    fun fallbackBridgeScript(key: String, apiUrl: String): String? {
+        require(key.isNotEmpty() && key.all { it in '0'..'9' || it in 'a'..'f' }) { "the bridge key is hex" }
+        val origin = originOf(base(apiUrl)) ?: return null
+        return "(function(){if(location.origin!==${jsString(origin)})return;" +
+            "var k='$key',b=window.$FALLBACK_BRIDGE_NAME;if(!b)return;" +
+            "window.$BRIDGE_NAME={postMessage:function(m){b.postMessage(k,String(m))}};})();"
+    }
+
+    /** A JavaScript string literal: letters and digits as they are, everything else escaped. */
+    private fun jsString(value: String): String = buildString {
+        append('\'')
+        for (c in value) {
+            if (c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9') append(c) else append("\\u%04x".format(c.code))
+        }
+        append('\'')
+    }
 
     /** One message from the page: a JSON string such as {"type":"affiliateo:chat-token","token":"lct_..."}. */
     fun parseHostMessage(text: String): HostMessage? {

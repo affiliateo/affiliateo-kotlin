@@ -25,14 +25,17 @@ import android.widget.FrameLayout
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import java.lang.ref.WeakReference
+import java.security.MessageDigest
+import java.security.SecureRandom
 
 /**
  * Live Chat's screen (4.14.0): Affiliateo's hosted chat page in a WebView, in
  * a sheet that slides up over the dimmed app (4.15.0; it was full screen).
  * The page's close button, Back and a tap on the app around it close it, and
- * links the business sends open in the browser. Declared in the library's
- * manifest (a see-through theme, so the app shows around the sheet), so the
- * app adds nothing.
+ * links the business sends open in the browser when the person taps them.
+ * Only this app's own chat page loads in it (4.15.4, review S18). Declared in
+ * the library's manifest (a see-through theme, so the app shows around the
+ * sheet), so the app adds nothing.
  */
 class ChatActivity : Activity() {
     companion object {
@@ -51,6 +54,8 @@ class ChatActivity : Activity() {
     private lateinit var scrim: View
     private lateinit var sheet: FrameLayout
     private var webView: WebView? = null
+    /** An older WebView's bridge key (4.15.4, review S18), handed to the chat page's main frame only; null with WebMessageListener. */
+    private var fallbackKey: String? = null
     private var background = Color.WHITE
     private var leaving = false
     // The sign-out count when this screen opened (4.15.1): a key the page
@@ -176,12 +181,25 @@ class ChatActivity : Activity() {
         web.settings.allowContentAccess = false
         addBridge(web)
         web.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                val target = request.url.toString()
-                if (!request.isForMainFrame || ChatRules.isChatPage(target, apiUrl)) return false
-                openOutside(request.url)
-                return true
-            }
+            /**
+             * ChatRules.navigation decides (4.15.4, review S18): this app's
+             * own chat page loads, frames stay on the chat's origin, and a
+             * link leaves the sheet only when the person taps it, never for a
+             * script or a redirect.
+             */
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
+                when (ChatRules.navigation(request.url.toString(), request.isForMainFrame, request.hasGesture(), apiUrl, appId)) {
+                    ChatRules.Navigation.LOAD -> false
+                    ChatRules.Navigation.OPEN_OUTSIDE -> {
+                        openOutside(request.url)
+                        true
+                    }
+                    ChatRules.Navigation.BLOCK -> true
+                }
+
+            override fun onPageCommitVisible(view: WebView, url: String?) = giveKey(view, url)
+
+            override fun onPageFinished(view: WebView, url: String?) = giveKey(view, url)
 
             /**
              * The page's process ended (memory pressure): start it again,
@@ -212,19 +230,42 @@ class ChatActivity : Activity() {
      * (4.15.2, review E15): where the WebView can, the bridge is offered to
      * the page's own origin only and answers its main frame only (androidx
      * WebMessageListener), so a frame inside the page cannot reach the SDK.
-     * An older WebView gets the plain JavaScript interface, still checked
-     * against the page's address in received().
+     *
+     * An older WebView (4.15.4, review S18) gets plain JavaScript
+     * interfaces, which Android puts in every frame. So the one that listens
+     * answers only messages that carry a random key, and only the chat page's
+     * main frame gets the key: giveKey runs ChatRules.fallbackBridgeScript
+     * there, which gives the page a window.AffiliateoChatBridge that adds it.
+     * A frame from another site cannot read the main frame, so it never
+     * learns the key. Until then window.AffiliateoChatBridge is HostSign,
+     * which does nothing: it only tells the page an app opened it, as before.
      */
     private fun addBridge(web: WebView) {
         val origin = ChatRules.pageOrigin(apiUrl)
         if (origin != null && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            fallbackKey = null
             WebViewCompat.addWebMessageListener(web, ChatRules.BRIDGE_NAME, setOf(origin)) { _, message, _, isMainFrame, _ ->
                 val json = message.data
                 if (isMainFrame && json != null) received(json)
             }
         } else {
-            web.addJavascriptInterface(Bridge(this), ChatRules.BRIDGE_NAME)
+            val key = ByteArray(16).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
+            fallbackKey = key
+            web.addJavascriptInterface(HostSign(), ChatRules.BRIDGE_NAME)
+            web.addJavascriptInterface(Bridge(this, key), ChatRules.FALLBACK_BRIDGE_NAME)
         }
+    }
+
+    /**
+     * An older WebView (4.15.4, review S18): the chat page's main frame gets
+     * window.AffiliateoChatBridge with the key, as soon as the page shows and
+     * again once it has loaded (the same either time).
+     */
+    private fun giveKey(view: WebView, url: String?) {
+        val key = fallbackKey ?: return
+        if (view !== webView || url == null || !ChatRules.isChatPage(url, apiUrl, appId)) return
+        val script = ChatRules.fallbackBridgeScript(key, apiUrl) ?: return
+        view.evaluateJavascript(script, null)
     }
 
     internal fun received(json: String) {
@@ -232,9 +273,10 @@ class ChatActivity : Activity() {
         // only once Android says so: the sheet slides down for 250 ms first
         // (leaving), and a sign-out since this screen opened counts at once.
         if (isFinishing || leaving || ChatSignOuts.current != openedAt) return
-        // Only the chat page itself may speak.
+        // Only this app's own chat page may speak (4.15.4, review S18): never
+        // another app's chat page, whose key would replace this person's.
         val current = webView?.url ?: return
-        if (!ChatRules.isChatPage(current, apiUrl)) return
+        if (!ChatRules.isChatPage(current, apiUrl, appId)) return
         when (val message = ChatRules.parseHostMessage(json)) {
             is ChatRules.HostMessage.Token -> LiveChat.saveToken(this, appId, message.token)
             ChatRules.HostMessage.Read -> LiveChat.setUnread(0)
@@ -244,8 +286,7 @@ class ChatActivity : Activity() {
     }
 
     private fun openOutside(target: Uri) {
-        val scheme = target.scheme?.lowercase() ?: return
-        if (scheme !in setOf("http", "https", "mailto", "tel")) return
+        if (!ChatRules.opensOutside(target.toString())) return
         try {
             startActivity(Intent(Intent.ACTION_VIEW, target))
         } catch (e: ActivityNotFoundException) {
@@ -269,12 +310,33 @@ class ChatActivity : Activity() {
         super.onDestroy()
     }
 
-    /** window.AffiliateoChatBridge.postMessage(json), called on a WebView thread. */
-    private class Bridge(activity: ChatActivity) {
+    /**
+     * An older WebView's window.AffiliateoChatBridge until the chat page has
+     * shown (4.15.4, review S18). The chat page reads its thread key from its
+     * address only when an app opened it, which it tells by this name, so it
+     * is there from the first line of the page, as before. Android puts it in
+     * every frame, so it does nothing; the page's own replaces it.
+     */
+    private class HostSign {
+        @Suppress("UNUSED_PARAMETER")
+        @JavascriptInterface
+        fun postMessage(json: String?) {
+            // A frame inside the page, or the page before it has shown: nothing happens.
+        }
+    }
+
+    /**
+     * An older WebView's plain interface (window.__affiliateoChatNative),
+     * called on a WebView thread by the page's window.AffiliateoChatBridge
+     * with the key. Without the key (a frame inside the page), nothing happens.
+     */
+    private class Bridge(activity: ChatActivity, private val key: String) {
         private val ref = WeakReference(activity)
 
         @JavascriptInterface
-        fun postMessage(json: String) {
+        fun postMessage(given: String?, json: String?) {
+            if (given == null || json == null) return
+            if (!MessageDigest.isEqual(given.toByteArray(Charsets.UTF_8), key.toByteArray(Charsets.UTF_8))) return
             val activity = ref.get() ?: return
             activity.runOnUiThread { activity.received(json) }
         }

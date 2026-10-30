@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import java.net.URI
 import java.net.URLDecoder
@@ -130,14 +131,112 @@ class ChatRulesTest {
         assertEquals(withToken, ChatRules.withoutFresh(withToken))
     }
 
+    /** 4.15.4 (review S18): only THIS app's own chat page counts, exactly. */
     @Test
-    fun onlyTheChatPageLoadsInside() {
-        val api = "https://affiliateo.com"
-        assertTrue(ChatRules.isChatPage("https://affiliateo.com/embed/chat/my-app?lang=en#p=android", api))
-        assertTrue(ChatRules.isChatPage("about:blank", api))
-        assertFalse(ChatRules.isChatPage("https://affiliateo.com/pricing", api))
-        assertFalse(ChatRules.isChatPage("https://affiliateo.com.evil.example/embed/chat/x", api))
-        assertFalse(ChatRules.isChatPage("https://example.com/", api))
+    fun onlyThisAppsChatPageLoadsInside() {
+        val api = "https://affiliateo.com/"
+        fun page(url: String, appId: String = "my-app") = ChatRules.isChatPage(url, api, appId)
+        assertTrue(page("https://affiliateo.com/embed/chat/my-app?lang=en#p=android"))
+        assertTrue(page("https://affiliateo.com/embed/chat/my-app/"))
+        assertTrue(page("https://AFFILIATEO.com:443/embed/chat/my-app"))
+        // Another app's chat page would hand over its own key.
+        assertFalse(page("https://affiliateo.com/embed/chat/other-app"))
+        assertFalse(page("https://affiliateo.com/embed/chat/my-app-2"))
+        assertFalse(page("https://affiliateo.com/embed/chat/my-app/more"))
+        assertFalse(page("https://affiliateo.com/embed/chat/"))
+        assertFalse(page("https://affiliateo.com/pricing"))
+        assertFalse(page("about:blank"))
+        // Not the chat's origin.
+        assertFalse(page("http://affiliateo.com/embed/chat/my-app"))
+        assertFalse(page("https://affiliateo.com:8443/embed/chat/my-app"))
+        assertFalse(page("https://affiliateo.com.evil.example/embed/chat/my-app"))
+        assertFalse(page("https://evil.example/embed/chat/my-app"))
+        assertFalse(page("not a url"))
+        // An app id that needs escaping matches its own escaped page.
+        assertTrue(page("https://affiliateo.com/embed/chat/a%20b", "a b"))
+        assertFalse(page("https://affiliateo.com/embed/chat/a%20c", "a b"))
+        // A local server.
+        assertTrue(ChatRules.isChatPage("http://10.0.2.2:3000/embed/chat/my-app", "http://10.0.2.2:3000", "my-app"))
+        assertFalse(ChatRules.isChatPage("http://10.0.2.2:3001/embed/chat/my-app", "http://10.0.2.2:3000", "my-app"))
+    }
+
+    /** 4.15.4 (review S18): what the chat sheet loads, hands to the phone, or stops. */
+    @Test
+    fun whatTheSheetLoads() {
+        val load = ChatRules.Navigation.LOAD
+        val outside = ChatRules.Navigation.OPEN_OUTSIDE
+        val block = ChatRules.Navigation.BLOCK
+        fun nav(url: String, mainFrame: Boolean = true, tapped: Boolean = false) =
+            ChatRules.navigation(url, mainFrame, tapped, "https://affiliateo.com", "my-app")
+        // The page itself.
+        assertEquals(load, nav("https://affiliateo.com/embed/chat/my-app#p=android"))
+        assertEquals(load, nav("about:blank"))
+        // A link the person tapped opens in the browser, the mail app or the phone app.
+        assertEquals(outside, nav("https://example.com/offer", tapped = true))
+        assertEquals(outside, nav("HTTP://example.com/", tapped = true))
+        assertEquals(outside, nav("mailto:help@example.com", tapped = true))
+        assertEquals(outside, nav("tel:+15551234567", tapped = true))
+        // The same without a tap (a script or a redirect) goes nowhere.
+        assertEquals(block, nav("https://example.com/offer"))
+        assertEquals(block, nav("mailto:help@example.com"))
+        assertEquals(block, nav("tel:+15551234567"))
+        // Another app's chat page, or another page of the site, never loads in the sheet.
+        assertEquals(block, nav("https://affiliateo.com/embed/chat/other-app"))
+        assertEquals(block, nav("https://affiliateo.com/pricing"))
+        assertEquals(outside, nav("https://affiliateo.com/embed/chat/other-app", tapped = true))
+        // Other kinds of links never open, tapped or not.
+        assertEquals(block, nav("intent://scan/#Intent;scheme=zxing;end", tapped = true))
+        assertEquals(block, nav("javascript:alert(1)", tapped = true))
+        assertEquals(block, nav("file:///sdcard/x", tapped = true))
+        assertEquals(block, nav("content://contacts/people", tapped = true))
+        assertEquals(block, nav("market://details?id=x", tapped = true))
+        assertEquals(block, nav("data:text/html,hi", tapped = true))
+        // Frames stay on the chat's origin (and Cloudflare's check), and never open anything.
+        assertEquals(load, nav("https://affiliateo.com/embed/part", mainFrame = false))
+        assertEquals(load, nav("about:blank", mainFrame = false))
+        assertEquals(load, nav("about:srcdoc", mainFrame = false))
+        assertEquals(load, nav("https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b", mainFrame = false))
+        assertEquals(block, nav("https://evil.example/", mainFrame = false))
+        assertEquals(block, nav("https://evil.example/", mainFrame = false, tapped = true))
+        assertEquals(block, nav("http://challenges.cloudflare.com/", mainFrame = false))
+        assertEquals(block, nav("intent://x#Intent;end", mainFrame = false, tapped = true))
+        assertEquals(block, nav("mailto:help@example.com", mainFrame = false, tapped = true))
+    }
+
+    /** 4.15.4 (review S18): the key's file in the no-backup folder, never a path of its own. */
+    @Test
+    fun theKeysFileName() {
+        val hashed = Regex("chat_token_[0-9a-f]{64}")
+        assertEquals("chat_token_my-app", ChatRules.tokenFileName("my-app"))
+        assertEquals("chat_token_App_123.v2", ChatRules.tokenFileName("App_123.v2"))
+        assertTrue(hashed.matches(ChatRules.tokenFileName("../../shared_prefs/affiliateo")))
+        assertTrue(hashed.matches(ChatRules.tokenFileName("a/b")))
+        assertTrue(hashed.matches(ChatRules.tokenFileName("")))
+        assertTrue(hashed.matches(ChatRules.tokenFileName("caf\u00e9")))
+        assertTrue(hashed.matches(ChatRules.tokenFileName("a".repeat(101))))
+        assertEquals(ChatRules.tokenFileName("a b"), ChatRules.tokenFileName("a b"))
+        assertFalse(ChatRules.tokenFileName("a b") == ChatRules.tokenFileName("a c"))
+    }
+
+    /** 4.15.4 (review S18): an older WebView's bridge answers only the key, which only the chat page's main frame gets. */
+    @Test
+    fun theOlderWebViewsBridgeScript() {
+        val script = ChatRules.fallbackBridgeScript("0a1b2c", "https://affiliateo.com/")!!
+        // It runs only in a document on the chat's origin.
+        assertTrue(script.startsWith("(function(){if(location.origin!=='https\\u003a\\u002f\\u002faffiliateo\\u002ecom')return;"))
+        assertTrue(script.contains("var k='0a1b2c',b=window.__affiliateoChatNative;if(!b)return;"))
+        assertTrue(script.contains("window.AffiliateoChatBridge={postMessage:function(m){b.postMessage(k,String(m))}}"))
+        assertTrue(ChatRules.fallbackBridgeScript("ff", "http://10.0.2.2:3000")!!.contains("'http\\u003a\\u002f\\u002f10\\u002e0\\u002e2\\u002e2\\u003a3000'"))
+        assertNull(ChatRules.fallbackBridgeScript("ff", "file:///sdcard/x"))
+        // Only a hex key goes into the script.
+        for (bad in listOf("", "AB", "x'", "0a';alert(1);'")) {
+            try {
+                ChatRules.fallbackBridgeScript(bad, "https://affiliateo.com")
+                fail("took $bad")
+            } catch (e: IllegalArgumentException) {
+                // Refused, as it should be.
+            }
+        }
     }
 
     @Test
