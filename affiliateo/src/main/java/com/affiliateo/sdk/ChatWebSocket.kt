@@ -186,14 +186,21 @@ internal class ChatWebSocket(
                 // The platform names the host from createSocket(host) itself.
             }
         }
-        try {
+        val identified = try {
             ssl.sslParameters = ssl.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
+            ssl.sslParameters.endpointIdentificationAlgorithm == "HTTPS"
         } catch (_: Exception) {
             // Not on this platform: the check after the handshake stays.
+            false
         }
         ssl.startHandshake()
         val verifier = hostnameVerifier ?: HttpsURLConnection.getDefaultHostnameVerifier()
-        if (!verifier.verify(host, ssl.session)) {
+        // A plain JVM's default verifier says no to everything (it is only a
+        // fallback there); when the handshake already checked the name, it is
+        // skipped. Android's default (OkHostnameVerifier) checks for real.
+        val denyAllFallback = hostnameVerifier == null &&
+            verifier.javaClass.name == "javax.net.ssl.HttpsURLConnection\$DefaultHostnameVerifier"
+        if (!(identified && denyAllFallback) && !verifier.verify(host, ssl.session)) {
             ssl.close()
             throw SSLPeerUnverifiedException("the certificate is not for $host")
         }
