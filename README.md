@@ -18,7 +18,7 @@ In your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.github.affiliateo:affiliateo-kotlin:4.15.4")
+    implementation("com.github.affiliateo:affiliateo-kotlin:4.16.0")
 }
 ```
 
@@ -270,7 +270,7 @@ Affiliateo.setChatPlaceholder(getString(R.string.chat_placeholder))
   the phone's language, with the unread count. It shows a red number for replies they have not read (live
   while the app is open), and a green dot while someone on your team is
   online. Switching the chat off in your dashboard, or someone on your team
-  going online or offline, reaches the bubble at once while the app is open.
+  going online or offline, reaches the bubble at once while the app is open (4.16.0).
   On launch it shows at once from the last answer the phone kept, then checks
   with the server (4.15.0).
 - In the Live Chat settings of your dashboard you choose, per app, the corner

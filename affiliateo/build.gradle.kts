@@ -10,7 +10,7 @@ plugins {
     id("maven-publish")
 }
 
-// Not released yet: Live Chat goes live without polling. The red number
+// 4.16.0: Live Chat goes live without polling. The red number
 //         comes over a socket on the thread (a small WebSocket client of the
 //         SDK's own, ChatWebSocket: TLS with SNI and a host name check, no new
 //         library); the 20 s poll stays only while that socket cannot
@@ -131,7 +131,7 @@ plugins {
 // install (Meta / TikTok / Google Ads) gets its source labelled server-side
 // with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-version = "4.15.4"
+version = "4.16.0"
 
 android {
     namespace = "com.affiliateo.sdk"
