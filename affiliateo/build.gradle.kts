@@ -10,6 +10,15 @@ plugins {
     id("maven-publish")
 }
 
+// Not released yet: Live Chat goes live without polling. The red number
+//         comes over a socket on the thread (a small WebSocket client of the
+//         SDK's own, ChatWebSocket: TLS with SNI and a host name check, no new
+//         library); the 20 s poll stays only while that socket cannot
+//         connect. While the app shows the bubble and is in front, the app's
+//         own channel (/api/live-chat/app-stream) brings the owner's on/off
+//         switch and the team's Online switches at once: switched off, the
+//         bubble goes and an open chat closes; otherwise the new look, corner,
+//         size, screens, greeting and green dot apply as a fresh config read.
 // 4.15.4: the chat sheet's links, frames and thread key (review S18). A link
 //         leaves the sheet only when the person taps it (never for a script
 //         or a redirect), and only to the browser, mail or phone app. Only

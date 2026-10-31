@@ -58,9 +58,13 @@ import java.util.Locale
  * bubble starts in, its size, the screens it shows on (matched against the
  * name the app last passed to Affiliateo.page()), and a greeting that counts
  * as one unread message until the chat is first opened. While the bubble is
- * on screen and the chat closed, the red number is asked for every
- * UNREAD_POLL_MS (Android has no WebSocket of its own, and the SDK adds no
- * library for one).
+ * on screen, the app in front and the chat closed, a socket on the thread
+ * keeps the red number live (ChatWebSocket: Android has no WebSocket of its
+ * own, and the SDK adds no library for one); the red number is asked for
+ * every UNREAD_POLL_MS only while that socket cannot connect. While the app
+ * shows the bubble and is in front, the app's own channel brings the owner's
+ * on/off switch and the team's Online switches at once (a config frame,
+ * applied as a fresh config read is).
  *
  * The bubble is a view the SDK adds on top of each screen's content
  * (android.R.id.content) as it comes up, never a window of its own, so a
@@ -77,8 +81,10 @@ internal object LiveChat {
     private const val BUBBLE_TAG = "affiliateo_chat_bubble"
     /** The SDK's one SharedPreferences file (Affiliateo.kt OPT_OUT_PREFS). */
     private const val PREFS = "affiliateo"
-    /** How often the red number is asked for while the bubble is on screen. */
+    /** How often the red number is asked for while the thread's socket cannot connect. */
     private const val UNREAD_POLL_MS = 20_000L
+    /** How often each live socket says "ping" (the server answers "pong"). */
+    private const val PING_MS = 30_000L
 
     private val main = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -111,6 +117,21 @@ internal object LiveChat {
     private var chatScreen: WeakReference<ChatActivity>? = null
     private var poll: Job? = null
 
+    // The thread's socket, for the red number.
+    private var threadSocket: ChatWebSocket? = null
+    private var threadOpen = false
+    private var threadTries = 0
+    private var threadRetry: Job? = null
+    private var threadPing: Job? = null
+
+    // The app channel: the owner's switch and the team's Online switches, live.
+    private var appSocket: ChatWebSocket? = null
+    private var appTries = 0
+    private var appRetry: Job? = null
+    private var appPing: Job? = null
+    /** The server refused the app channel (no such app, or the chat is off): not tried again until a config read says the chat is on. */
+    private var appRefused = false
+
     private val env: ChatRules.Env? get() = Affiliateo.chatEnv()
 
     private fun log(msg: String) = Affiliateo.chatLog(msg)
@@ -134,7 +155,10 @@ internal object LiveChat {
 
             override fun onActivityStopped(activity: Activity) {
                 startedCount--
-                if (startedCount == 0) stopPolling()
+                if (startedCount == 0) {
+                    stopLive()
+                    syncAppChannel()
+                }
             }
 
             override fun onActivityResumed(activity: Activity) {
@@ -226,7 +250,7 @@ internal object LiveChat {
 
     /**
      * The person signed out (Affiliateo.logout()). Their token goes right
-     * away, then their red number, the poll and an open chat, so whoever
+     * away, then their red number, the socket, the poll and an open chat, so whoever
      * signs in next starts a new thread. The bubble's place and the greeting
      * seen belong to the phone, not the person: they stay.
      */
@@ -238,7 +262,7 @@ internal object LiveChat {
         val ctx = Affiliateo.chatContext() ?: return
         ChatTokenStore.of(ctx).clear(e.appId)
         onMain {
-            stopPolling()
+            stopLive()
             unreadCheckedAt = 0L
             visitorOnline = false
             setUnread(0)
@@ -288,12 +312,39 @@ internal object LiveChat {
         }
         config = answer
         configCheckedAt = System.currentTimeMillis()
-        // Somebody who already wrote has seen the greeting.
+        noteGreeting(answer, e)
+        // The chat is on: the app channel may be tried again.
+        if (answer.enabled) appRefused = false
+        return answer
+    }
+
+    /** Somebody who already wrote has seen the greeting. */
+    private fun noteGreeting(answer: ChatRules.Config, e: ChatRules.Env) {
         val ctx = Affiliateo.chatContext()
         val greetingId = answer.bubble.greetingId
         greetingPending = answer.enabled && greetingId != null && ctx != null &&
             storedToken(ctx, e.appId) == null && prefs(ctx).getString(ChatRules.greetingKey(e.appId), null) != greetingId
-        return answer
+    }
+
+    /**
+     * A config frame from the app channel: kept as a fresh config read would
+     * be (the current config, the phone's saved answer, its age) and applied
+     * the same way. Off, the bubble goes and an open chat closes.
+     */
+    fun receivedAppFrame(text: String) = onMain {
+        val (answer, saved) = ChatRules.parseAppFrame(text) ?: return@onMain
+        val e = env
+        if (e != null) {
+            Affiliateo.chatContext()?.let { prefs(it).edit().putString(ChatRules.configKey(e.appId), saved).apply() }
+            noteGreeting(answer, e)
+        }
+        config = answer
+        configCheckedAt = System.currentTimeMillis()
+        if (!answer.enabled) {
+            log("the chat was switched off for this app")
+            chatScreen?.get()?.finish()
+        }
+        placeBubble()
     }
 
     /** Replies the person has not seen, for the red number on the bubble. */
@@ -348,7 +399,18 @@ internal object LiveChat {
 
     // ── The live red number ───────────────────────────────────────────────
 
-    /** Asks for the red number every UNREAD_POLL_MS while the bubble is on screen, the app is in front and the chat is closed. */
+    /** The thread's socket and its fallback poll, while the bubble is on screen, the app is in front and the chat is closed (the chat screen has its own). */
+    private fun startLive() {
+        startThreadSocket()
+        startPolling()
+    }
+
+    private fun stopLive() {
+        stopPolling()
+        stopThreadSocket()
+    }
+
+    /** Asks for the red number every UNREAD_POLL_MS while the thread's socket is not open. */
     private fun startPolling() {
         if (poll?.isActive == true) return
         val ctx = Affiliateo.chatContext() ?: return
@@ -358,7 +420,7 @@ internal object LiveChat {
             while (isActive) {
                 delay(UNREAD_POLL_MS)
                 if (startedCount == 0 || screenOpen) break
-                refreshUnread(force = true)
+                if (!threadOpen) refreshUnread(force = true)
             }
         }
     }
@@ -366,6 +428,136 @@ internal object LiveChat {
     private fun stopPolling() {
         poll?.cancel()
         poll = null
+    }
+
+    private fun startThreadSocket() {
+        if (threadSocket != null || threadRetry?.isActive == true) return
+        val ctx = Affiliateo.chatContext() ?: return
+        val e = env ?: return
+        val token = storedToken(ctx, e.appId) ?: return
+        // The key goes in the header, never in the address, where it would
+        // land in the server's request logs.
+        val socket = ChatWebSocket(ChatRules.threadStreamUrl(e.apiUrl), mapOf("Authorization" to "Bearer $token"), threadListener)
+        threadSocket = socket
+        socket.connect()
+    }
+
+    private val threadListener = object : ChatWebSocket.Listener {
+        override fun onOpen(socket: ChatWebSocket) = onMain {
+            if (threadSocket !== socket) return@onMain
+            val dropped = threadTries > 0
+            threadTries = 0
+            threadOpen = true
+            threadPing = scope.launch {
+                while (isActive) {
+                    delay(PING_MS)
+                    socket.send("ping")
+                }
+            }
+            // Replies that came in while it was down.
+            if (dropped) scope.launch { refreshUnread(force = true) }
+        }
+
+        override fun onText(socket: ChatWebSocket, text: String) = onMain {
+            if (threadSocket !== socket) return@onMain
+            when (ChatRules.parseThreadFrame(text)) {
+                ChatRules.ThreadFrame.TEAM_MESSAGE -> setUnread(unread + 1)
+                ChatRules.ThreadFrame.VISITOR_READ -> setUnread(0)
+                null -> {}
+            }
+        }
+
+        override fun onClosed(socket: ChatWebSocket, httpStatus: Int?, error: Throwable?) = onMain {
+            if (threadSocket !== socket) return@onMain
+            dropThreadSocket()
+            threadTries++
+            threadRetry = scope.launch {
+                delay(ChatRules.threadRetryMs(threadTries))
+                threadRetry = null
+                if (startedCount > 0 && !screenOpen && bubbleIn(resumed?.get()) != null) startThreadSocket()
+            }
+        }
+    }
+
+    private fun dropThreadSocket() {
+        threadPing?.cancel()
+        threadPing = null
+        threadOpen = false
+        threadSocket?.close()
+        threadSocket = null
+    }
+
+    private fun stopThreadSocket() {
+        threadRetry?.cancel()
+        threadRetry = null
+        threadTries = 0
+        dropThreadSocket()
+    }
+
+    // ── The app channel ───────────────────────────────────────────────────
+
+    /**
+     * Opens or closes the app channel to match ChatRules.appChannelWanted.
+     * The chat screen may be open or closed, and the bubble hidden on this
+     * screen by the page rules: the channel stays while the app shows it.
+     */
+    private fun syncAppChannel() {
+        val e = env
+        if (e != null && ChatRules.appChannelWanted(wantsBubble, startedCount > 0, config, appRefused)) startAppChannel(e) else stopAppChannel()
+    }
+
+    private fun startAppChannel(e: ChatRules.Env) {
+        if (appSocket != null || appRetry?.isActive == true) return
+        val socket = ChatWebSocket(ChatRules.appChannelUrl(e.apiUrl, e.appId), emptyMap(), appListener)
+        appSocket = socket
+        socket.connect()
+    }
+
+    private val appListener = object : ChatWebSocket.Listener {
+        override fun onOpen(socket: ChatWebSocket) = onMain {
+            if (appSocket !== socket) return@onMain
+            appTries = 0
+            appPing = scope.launch {
+                while (isActive) {
+                    delay(PING_MS)
+                    socket.send("ping")
+                }
+            }
+        }
+
+        override fun onText(socket: ChatWebSocket, text: String) = onMain {
+            if (appSocket === socket) receivedAppFrame(text)
+        }
+
+        override fun onClosed(socket: ChatWebSocket, httpStatus: Int?, error: Throwable?) = onMain {
+            if (appSocket !== socket) return@onMain
+            dropAppChannel()
+            if (ChatRules.refusesAppChannel(httpStatus)) {
+                appRefused = true
+                log("app channel refused ($httpStatus)")
+                return@onMain
+            }
+            appTries++
+            appRetry = scope.launch {
+                delay(ChatRules.appChannelDelayMs(appTries, Math.random()))
+                appRetry = null
+                syncAppChannel()
+            }
+        }
+    }
+
+    private fun dropAppChannel() {
+        appPing?.cancel()
+        appPing = null
+        appSocket?.close()
+        appSocket = null
+    }
+
+    private fun stopAppChannel() {
+        appRetry?.cancel()
+        appRetry = null
+        appTries = 0
+        dropAppChannel()
     }
 
     // ── Token (ChatTokenStore), greeting and position (SharedPreferences) ──
@@ -444,6 +636,7 @@ internal object LiveChat {
      * otherwise on top of the screen's content, as before.
      */
     private fun placeBubble() {
+        syncAppChannel()
         val activity = resumed?.get() ?: return
         if (activity is ChatActivity || activity.isFinishing) return
         // Never on another library's screen over the app's own (Play Billing's
@@ -460,11 +653,11 @@ internal object LiveChat {
         val cfg = config
         val e = env
         val style = ChatRules.applying(look, cfg?.bubble ?: ChatRules.Bubble.STANDARD)
-        if (!wantsBubble || screenOpen || e == null || cfg == null || !cfg.enabled || !cfg.showBubble ||
+        if (!ChatRules.showsBubble(wantsBubble, cfg) || screenOpen || e == null ||
             !ChatRules.bubbleShowsOn(style.pageMode, style.pageRules, currentScreen)
         ) {
             existing?.let { container.removeView(it) }
-            stopPolling()
+            stopLive()
             return
         }
         // A phone gets the owner's phone size ("auto" makes it smaller), a tablet the other.
@@ -486,7 +679,7 @@ internal object LiveChat {
         }
         bubble.bringToFront()
         paintBubble()
-        startPolling()
+        startLive()
     }
 
     // ── The chat screen ───────────────────────────────────────────────────

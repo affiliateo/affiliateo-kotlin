@@ -287,6 +287,92 @@ internal object ChatRules {
         return if (unread >= 0) unread else null
     }
 
+    /**
+     * Whether the bubble belongs on the app's pages at all: the app asked for
+     * it and the chat is on with its bubble showing. A config that says the
+     * chat is off (a fresh read or the app channel) takes it away.
+     */
+    fun showsBubble(wanted: Boolean, config: Config?): Boolean =
+        wanted && config != null && config.enabled && config.showBubble
+
+    // ── The live sockets ──────────────────────────────────────────────────
+
+    /** What a frame on the thread's socket means for the red number. */
+    enum class ThreadFrame {
+        /** A reply from the team: one more unread. */
+        TEAM_MESSAGE,
+
+        /** The person read everything (in the chat, here or on another device). */
+        VISITOR_READ,
+    }
+
+    /** The thread's socket (the visitor's key goes in its Authorization header, never in the address). */
+    fun threadStreamUrl(apiUrl: String): String = "${wsBase(apiUrl)}/api/live-chat/stream"
+
+    /**
+     * The app's own live channel, for everyone with the bubble on screen: a
+     * change of the owner's on/off switch or of a teammate's Online switch
+     * arrives on it at once as a config frame. It needs no key.
+     */
+    fun appChannelUrl(apiUrl: String, appId: String): String = "${wsBase(apiUrl)}/api/live-chat/app-stream?app=${encode(appId)}"
+
+    private fun wsBase(apiUrl: String) = base(apiUrl).replaceFirst(Regex("^http"), "ws")
+
+    /** A frame on the thread's socket, as the Swift SDK reads it; null for anything else ("pong" included). */
+    fun parseThreadFrame(text: String): ThreadFrame? {
+        val frame = try {
+            JSONObject(text)
+        } catch (e: Exception) {
+            return null
+        }
+        if (frame.optString("kind") != "live_chat") return null
+        return when (frame.optString("event")) {
+            "message" -> if (frame.optJSONObject("message")?.optString("sender") == "team") ThreadFrame.TEAM_MESSAGE else null
+            "read" -> if (frame.optString("by") == "visitor") ThreadFrame.VISITOR_READ else null
+            else -> null
+        }
+    }
+
+    /**
+     * A config frame from the app channel: its config is exactly what
+     * /api/live-chat/config answers, read with the same parser, paired with
+     * the JSON to keep as the phone's saved answer. Null for any other frame.
+     */
+    fun parseAppFrame(text: String): Pair<Config, String>? {
+        val frame = try {
+            JSONObject(text)
+        } catch (e: Exception) {
+            return null
+        }
+        if (frame.optString("kind") != "live_chat" || frame.optString("event") != "config") return null
+        val saved = frame.optJSONObject("config")?.toString() ?: return null
+        return Pair(parseConfig(saved), saved)
+    }
+
+    /** Whether the app channel should be open: the app shows the bubble, it is in front, the chat is on, and the server has not refused it since the last config read. */
+    fun appChannelWanted(wantsBubble: Boolean, inFront: Boolean, config: Config?, refused: Boolean): Boolean =
+        wantsBubble && inFront && !refused && config?.enabled == true
+
+    /**
+     * A refusal of the app channel (no such app, or its chat is off): it is
+     * not tried again until a config read says the chat is on. A full server
+     * (429) or a timeout (408) is tried again later.
+     */
+    fun refusesAppChannel(status: Int?): Boolean = status != null && status in 400..499 && status != 408 && status != 429
+
+    /**
+     * The wait before try number [tries] (1 and up) to reach the app channel
+     * again: 2 s doubling up to 60 s, plus up to a quarter more ([jitter] 0
+     * to 1), so phones do not all come back at once.
+     */
+    fun appChannelDelayMs(tries: Int, jitter: Double): Long {
+        val base = minOf(60_000L, 2_000L shl (tries.coerceIn(1, 7) - 1))
+        return base + (base * 0.25 * jitter.coerceIn(0.0, 1.0)).toLong()
+    }
+
+    /** The wait before the thread's socket tries again, as the Swift SDK's: 2 s doubling up to 60 s. */
+    fun threadRetryMs(tries: Int): Long = minOf(60_000L, 1_000L shl tries.coerceIn(1, 6))
+
     // ── The chat page ─────────────────────────────────────────────────────
 
     /**

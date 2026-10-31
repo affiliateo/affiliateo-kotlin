@@ -267,10 +267,12 @@ Affiliateo.setChatPlaceholder(getString(R.string.chat_placeholder))
   ```
 
   People can drag it and it stays where they leave it. TalkBack reads it in
-  the phone's language, with the unread count. It shows a red number for replies they have not read (asked for
-  every 20 seconds while the bubble is on screen), and a green dot while
-  someone on your team is online. On launch it shows at once from the last
-  answer the phone kept, then checks with the server (4.15.0).
+  the phone's language, with the unread count. It shows a red number for replies they have not read (live
+  while the app is open), and a green dot while someone on your team is
+  online. Switching the chat off in your dashboard, or someone on your team
+  going online or offline, reaches the bubble at once while the app is open.
+  On launch it shows at once from the last answer the phone kept, then checks
+  with the server (4.15.0).
 - In the Live Chat settings of your dashboard you choose, per app, the corner
   it starts in, its size, its style (the blue circle, or "Glass": a
   see-through blue glass circle, 4.15.0), a greeting that shows as one unread message (a red
