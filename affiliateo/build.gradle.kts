@@ -10,6 +10,11 @@ plugins {
     id("maven-publish")
 }
 
+// 4.16.2: the queue counts the phone offline only when its LAST usable
+//         network goes (Reachability.kt). Before, losing any one network
+//         (Wi-Fi, with mobile data still up) marked it offline until a brand
+//         new network came up, so events could wait until the next network
+//         change or app start.
 // 4.16.1: tracking events go to the server in one request per flush. page(),
 //         track() and the session pings still wait in the same queue and
 //         flush on the same timer (every 5 s by default, or at 10 queued), but
@@ -141,7 +146,7 @@ plugins {
 // install (Meta / TikTok / Google Ads) gets its source labelled server-side
 // with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-version = "4.16.1"
+version = "4.16.2"
 
 android {
     namespace = "com.affiliateo.sdk"

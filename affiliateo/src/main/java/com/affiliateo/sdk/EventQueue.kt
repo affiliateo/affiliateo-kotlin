@@ -89,9 +89,11 @@ internal class EventQueue(
     private val queue: MutableList<QueuedEvent> = mutableListOf()
     private val isFlushing = AtomicBoolean(false)
     @Volatile private var shuttingDown = false
-    // Optimistic default. ConnectivityManager's first callback flips this
-    // to the real value within a few hundred ms of registration.
-    @Volatile private var isConnected = true
+    // Every usable network as Android reports it (4.16.2): offline only
+    // when the last one goes, so a switch from Wi-Fi to mobile data never
+    // leaves the queue waiting. Starts online, as before.
+    private val reachability = Reachability<Network>()
+    private val isConnected: Boolean get() = reachability.online
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var flushJob: Job? = null
@@ -245,8 +247,7 @@ internal class EventQueue(
 
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                val wasOffline = !isConnected
-                isConnected = true
+                val wasOffline = reachability.available(network)
                 if (wasOffline) {
                     // Came back online — fire a catch-up flush right now
                     // instead of waiting up to flushIntervalMs.
@@ -254,7 +255,8 @@ internal class EventQueue(
                 }
             }
             override fun onLost(network: Network) {
-                isConnected = false
+                // Offline only when no other usable network is left.
+                reachability.lost(network)
             }
         }
         try {
