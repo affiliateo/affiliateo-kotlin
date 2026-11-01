@@ -29,6 +29,9 @@ import kotlin.concurrent.withLock
  *   - In-memory `queue` list of QueuedEvent (id + endpoint + JSON payload + retries)
  *   - Persisted to SharedPreferences under STORAGE_KEY as a JSON array on every mutation
  *   - Background coroutine timer fires every FLUSH_INTERVAL_MS to attempt delivery
+ *   - A flush sends the events of one app and device that sit in a row in ONE
+ *     request (4.16.1, EventBatch): up to 100 events and about 60 KB per
+ *     request. Purchases and ad ids still go one request each, in order.
  *   - ConnectivityManager callback pauses flushing while offline; fires an
  *     immediate flush the moment connectivity returns (no waiting for the timer)
  *   - Failed events bump a per-event retry counter; dropped after MAX_RETRIES
@@ -52,7 +55,9 @@ internal class EventQueue(
     maxQueueSize: Int = DEFAULT_MAX_QUEUE_SIZE,
 ) {
 
-    private data class QueuedEvent(
+    // internal (not private) so EventBatch, which plans a flush's requests
+    // and settles their answers, can read it; the unit tests build them too.
+    internal data class QueuedEvent(
         val id: String,
         val endpoint: String,
         val payloadJson: String,
@@ -132,9 +137,11 @@ internal class EventQueue(
         }
     }
 
-    /** Try to deliver every queued event. Each event gets one attempt
-     *  per flush; failures bump retries and stay queued. Events that
-     *  hit maxRetries are dropped. Skipped entirely when offline. */
+    /** Try to deliver every queued event. Each entry gets one attempt per
+     *  flush; the events of one app and device in a row share a request
+     *  (EventBatch.plan). A failed request bumps the retries of every entry
+     *  it carried, and an entry that hits maxRetries is dropped
+     *  (EventBatch.settle). Skipped entirely when offline. */
     suspend fun flush() {
         if (!isConnected) return
         if (!isFlushing.compareAndSet(false, true)) return
@@ -144,31 +151,9 @@ internal class EventQueue(
             val snapshot = lock.withLock { queue.toList() }
             if (snapshot.isEmpty()) return
 
-            for (event in snapshot) {
-                val ok = sendOnce(event)
-                // <Unit> is load-bearing, not decoration. withLock is
-                // `fun <T> Lock.withLock(action: () -> T): T`, so T is inferred
-                // from the lambda's last expression. Left to infer, the
-                // if/else below becomes an EXPRESSION (its branches being
-                // Boolean from removeAll and Unit from the else), which in turn
-                // forces the two nested ifs to be expressions too — and an
-                // `if` used as an expression must have an else. That is the
-                // "'if' must have both main and 'else' branches if used as an
-                // expression" error this file failed on. Pinning T to Unit
-                // makes the body a statement block again.
-                lock.withLock<Unit> {
-                    if (ok) {
-                        queue.removeAll { it.id == event.id }
-                    } else {
-                        val idx = queue.indexOfFirst { it.id == event.id }
-                        if (idx >= 0) {
-                            queue[idx].retries++
-                            if (queue[idx].retries >= MAX_RETRIES) {
-                                queue.removeAt(idx)
-                            }
-                        }
-                    }
-                }
+            for (request in EventBatch.plan(snapshot)) {
+                val ok = sendOnce(request.endpoint, request.body)
+                lock.withLock { EventBatch.settle(queue, request.ids, ok, MAX_RETRIES) }
             }
 
             lock.withLock { persist() }
@@ -290,16 +275,16 @@ internal class EventQueue(
         networkCallback = null
     }
 
-    private suspend fun sendOnce(event: QueuedEvent): Boolean = withContext(Dispatchers.IO) {
+    private suspend fun sendOnce(endpoint: String, body: String): Boolean = withContext(Dispatchers.IO) {
         try {
-            val conn = (URL(event.endpoint).openConnection() as HttpURLConnection).apply {
+            val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 doOutput = true
                 connectTimeout = 10_000
                 readTimeout = 10_000
                 setRequestProperty("Content-Type", "application/json")
             }
-            conn.outputStream.use { it.write(event.payloadJson.toByteArray()) }
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             val code = conn.responseCode
             // Drain the response body so the underlying socket gets recycled
             // (Android's HttpURLConnection has a long-standing footgun where

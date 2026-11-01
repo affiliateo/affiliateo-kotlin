@@ -10,6 +10,16 @@ plugins {
     id("maven-publish")
 }
 
+// 4.16.1: tracking events go to the server in one request per flush. page(),
+//         track() and the session pings still wait in the same queue and
+//         flush on the same timer (every 5 s by default, or at 10 queued), but
+//         the events of one app and device that sit in a row now go in ONE
+//         POST to /api/v1/mobile/event (EventBatch.kt): up to 100 events and
+//         about 60 KB per request. Each event keeps its own event_id and
+//         timestamp, so a batch resent after a lost answer writes nothing
+//         twice. A failed batch counts one try for every event in it, as one
+//         event did before. Purchases and ad ids still go one request each,
+//         in order. Live Chat is unchanged.
 // 4.16.0: Live Chat goes live without polling. The red number
 //         comes over a socket on the thread (a small WebSocket client of the
 //         SDK's own, ChatWebSocket: TLS with SNI and a host name check, no new
@@ -131,7 +141,7 @@ plugins {
 // install (Meta / TikTok / Google Ads) gets its source labelled server-side
 // with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-version = "4.16.0"
+version = "4.16.1"
 
 android {
     namespace = "com.affiliateo.sdk"
