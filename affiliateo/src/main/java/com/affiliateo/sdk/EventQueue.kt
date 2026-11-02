@@ -34,7 +34,13 @@ import kotlin.concurrent.withLock
  *     request. Purchases and ad ids still go one request each, in order.
  *   - ConnectivityManager callback pauses flushing while offline; fires an
  *     immediate flush the moment connectivity returns (no waiting for the timer)
- *   - Failed events bump a per-event retry counter; dropped after MAX_RETRIES
+ *   - Retries (4.16.3, SendRetry): an answer that may change (no answer, 404,
+ *     408, 429, 5xx) keeps the request's events, and the queue waits 5 s,
+ *     doubling up to 5 minutes, before its next try, at least as long as a
+ *     429 or 503 asks (Retry-After). The rest of that flush waits too. A
+ *     refusal (another 4xx) drops them, with one debug line. Only the size cap
+ *     drops a waiting event; it used to be dropped after its third failed try
+ *   - The app going to the background flushes too (4.16.3, Affiliateo)
  *
  * Why SharedPreferences instead of Room / DataStore:
  *   SharedPreferences is the platform-idiomatic key-value store for small
@@ -44,7 +50,6 @@ import kotlin.concurrent.withLock
  *   newer but coroutine-only API would force every consumer onto coroutines.
  *
  * Caps (matched to web + RN + Swift for cross-platform consistency):
- *   - maxRetries = 3
  *   - maxQueueSize = 100      hard cap, FIFO drop on overflow
  *   - flushIntervalMs = 5_000 periodic auto-flush cadence
  *   - sizeFlushThreshold = 10 trigger flush when queue grows past
@@ -53,6 +58,8 @@ internal class EventQueue(
     private val context: Context,
     flushIntervalMs: Long = DEFAULT_FLUSH_INTERVAL_MS,
     maxQueueSize: Int = DEFAULT_MAX_QUEUE_SIZE,
+    /** Gets the debug lines (a refused request, 4.16.3). */
+    private val log: (String) -> Unit = {},
 ) {
 
     // internal (not private) so EventBatch, which plans a flush's requests
@@ -61,13 +68,14 @@ internal class EventQueue(
         val id: String,
         val endpoint: String,
         val payloadJson: String,
+        // Kept answers so far. A record only since 4.16.3: nothing is
+        // dropped for it.
         var retries: Int,
     )
 
     companion object {
         private const val STORAGE_KEY = "affiliateo_event_queue"
         private const val PREFS_NAME = "affiliateo_queue"
-        private const val MAX_RETRIES = 3
         private const val DEFAULT_MAX_QUEUE_SIZE = 100
         private const val DEFAULT_FLUSH_INTERVAL_MS = 5_000L
         private const val SIZE_FLUSH_THRESHOLD = 10
@@ -94,6 +102,8 @@ internal class EventQueue(
     // leaves the queue waiting. Starts online, as before.
     private val reachability = Reachability<Network>()
     private val isConnected: Boolean get() = reachability.online
+    // When the next try may go after a kept answer (4.16.3). Under the lock.
+    private val retry = SendRetry()
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var flushJob: Job? = null
@@ -139,23 +149,34 @@ internal class EventQueue(
         }
     }
 
-    /** Try to deliver every queued event. Each entry gets one attempt per
-     *  flush; the events of one app and device in a row share a request
-     *  (EventBatch.plan). A failed request bumps the retries of every entry
-     *  it carried, and an entry that hits maxRetries is dropped
-     *  (EventBatch.settle). Skipped entirely when offline. */
+    /** Try to deliver every queued event, in queue order; the events of one
+     *  app and device in a row share a request (EventBatch.plan). A request
+     *  whose answer may change keeps its entries and ends the flush, so the
+     *  rest waits with them (4.16.3, SendRetry and EventBatch.settle).
+     *  Skipped entirely when offline, and until the wait after such an
+     *  answer is over. */
     suspend fun flush() {
         if (!isConnected) return
         if (!isFlushing.compareAndSet(false, true)) return
         try {
             // Snapshot the queue so new enqueue()s during the flush land
             // in the live queue and get picked up on the NEXT flush.
-            val snapshot = lock.withLock { queue.toList() }
+            val snapshot = lock.withLock {
+                if (retry.canSend(System.currentTimeMillis())) queue.toList() else emptyList()
+            }
             if (snapshot.isEmpty()) return
 
             for (request in EventBatch.plan(snapshot)) {
-                val ok = sendOnce(request.endpoint, request.body)
-                lock.withLock { EventBatch.settle(queue, request.ids, ok, MAX_RETRIES) }
+                val answer = sendOnce(request.endpoint, request.body)
+                val outcome = lock.withLock {
+                    retry.answered(answer, System.currentTimeMillis()).also { EventBatch.settle(queue, request.ids, it) }
+                }
+                if (outcome == SendRetry.Outcome.REFUSED) {
+                    log("dropped ${request.ids.size} queued event(s): the server refused them (HTTP ${answer.status}, ${request.endpoint})")
+                }
+                // The server is busy or out of reach for the rest too: they
+                // wait behind the kept ones, in queue order.
+                if (outcome == SendRetry.Outcome.KEPT) break
             }
 
             lock.withLock { persist() }
@@ -249,8 +270,10 @@ internal class EventQueue(
             override fun onAvailable(network: Network) {
                 val wasOffline = reachability.available(network)
                 if (wasOffline) {
-                    // Came back online — fire a catch-up flush right now
-                    // instead of waiting up to flushIntervalMs.
+                    // Came back online: a wait for the network is over (one
+                    // the server asked for still holds), so fire a catch-up
+                    // flush right now instead of waiting up to flushIntervalMs.
+                    lock.withLock { retry.networkBack() }
                     scope.launch { flush() }
                 }
             }
@@ -277,7 +300,9 @@ internal class EventQueue(
         networkCallback = null
     }
 
-    private suspend fun sendOnce(endpoint: String, body: String): Boolean = withContext(Dispatchers.IO) {
+    /** One POST. Answers its status and Retry-After (4.16.3); the status is
+     *  null when no answer came (offline, a time out). */
+    private suspend fun sendOnce(endpoint: String, body: String): SendRetry.Answer = withContext(Dispatchers.IO) {
         try {
             val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
@@ -288,6 +313,7 @@ internal class EventQueue(
             }
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             val code = conn.responseCode
+            val retryAfter = conn.getHeaderField("Retry-After")
             // Drain the response body so the underlying socket gets recycled
             // (Android's HttpURLConnection has a long-standing footgun where
             // unread bodies prevent connection reuse).
@@ -296,9 +322,10 @@ internal class EventQueue(
                 stream?.use { BufferedReader(InputStreamReader(it)).readText() }
             } catch (_: Exception) { /* swallow */ }
             conn.disconnect()
-            code in 200..299
+            // -1 is a reply that was not HTTP: no answer.
+            SendRetry.Answer(code.takeIf { it > 0 }, retryAfter)
         } catch (_: Exception) {
-            false
+            SendRetry.Answer(null)
         }
     }
 

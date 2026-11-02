@@ -140,6 +140,8 @@ object Affiliateo {
             context.applicationContext,
             flushIntervalMs = flushIntervalMs,
             maxQueueSize = maxQueueSize,
+            // Its debug lines (a refused request, 4.16.3) go through log().
+            log = { log(it) },
         )
         // Pick up the debug flag BEFORE any other side effect so the next
         // log() call (in the opted-out branch or the identify launch
@@ -236,6 +238,13 @@ object Affiliateo {
 
             override fun onActivityStopped(activity: Activity) {
                 activeCount--
+                // The app went to the background (4.16.3): send what is
+                // waiting now, not at the next launch. A rotation stops and
+                // restarts the screen, so it does not count.
+                if (activeCount == 0 && !activity.isChangingConfigurations && !optedOut) {
+                    val q = queue
+                    scope?.launch(Dispatchers.IO) { q?.flush() }
+                }
             }
 
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
@@ -463,9 +472,11 @@ object Affiliateo {
 
     /**
      * Force-drain the event queue immediately. Useful before a known
-     * unrecoverable transition (entering an in-app purchase flow, app
-     * about to be backgrounded for a long time). Best-effort: if offline
-     * the flush noops and events stay queued for the next retry.
+     * unrecoverable transition (entering an in-app purchase flow).
+     * Best-effort: if offline, or while the queue waits after the server was
+     * busy or out of reach (4.16.3), the flush noops and events stay queued
+     * for the next try. The SDK flushes on its own as the app goes to the
+     * background (4.16.3).
      *
      * Coroutine-suspending. Wrap in `runBlocking` from Java callers if
      * needed (rare — most callers are already in a coroutine scope).

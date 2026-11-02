@@ -10,6 +10,15 @@ plugins {
     id("maven-publish")
 }
 
+// 4.16.3: tracked events wait instead of being lost. When the server is busy
+//         or out of reach (no answer, a time out, 404, 408, 429 or 5xx) the
+//         queue keeps the events and tries again after 5 s, then 10, 20 and
+//         so on up to about 5 minutes, never sooner than the server's
+//         Retry-After asks (SendRetry.kt). They used to be dropped after
+//         three tries 5 s apart. Only a request the server refuses (another
+//         4xx) is dropped, with one line in the debug log, and only the
+//         queue's size cap drops a waiting event. The events still waiting
+//         are sent as the app goes to the background. No API changes.
 // 4.16.2: the queue counts the phone offline only when its LAST usable
 //         network goes (Reachability.kt). Before, losing any one network
 //         (Wi-Fi, with mobile data still up) marked it offline until a brand
@@ -146,7 +155,7 @@ plugins {
 // install (Meta / TikTok / Google Ads) gets its source labelled server-side
 // with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-version = "4.16.2"
+version = "4.16.3"
 
 android {
     namespace = "com.affiliateo.sdk"

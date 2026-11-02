@@ -220,32 +220,42 @@ class EventBatchTest {
         val entries = listOf(event(), event(), event(), other("/api/v1/mobile/purchase"), event())
         val queue = entries.toMutableList()
         val requests = EventBatch.plan(queue.toList())
-        EventBatch.settle(queue, requests[0].ids, ok = true, maxRetries = 3)
+        EventBatch.settle(queue, requests[0].ids, SendRetry.Outcome.SENT)
         assertEquals(listOf("q3", "q4"), queue.map { it.id })
     }
 
     @Test
+    fun aRefusalRemovesEveryMergedEntry() {
+        // 4.16.3: a 4xx other than 404, 408 and 429 would be refused again.
+        val queue = mutableListOf(event(), event(), other("/api/v1/mobile/purchase"))
+        val batch = EventBatch.plan(queue.toList()).first()
+        EventBatch.settle(queue, batch.ids, SendRetry.Outcome.REFUSED)
+        assertEquals(listOf("q2"), queue.map { it.id })
+    }
+
+    @Test
     fun failureKeepsEveryMergedEntry() {
-        // Retries already used: 0, 1, 2 and 0. A failed batch is one failed try
-        // for each, so the one on its third try is dropped, exactly as a single
-        // entry is, and the others stay queued for the next flush.
+        // Retries already used: 0, 1, 2 and 0. A kept batch is one more try
+        // for each, and since 4.16.3 the one on its third try stays too: only
+        // the size cap drops a waiting entry.
         val queue = mutableListOf(event(), event(retries = 1), event(retries = 2), event(), other("/api/v1/mobile/purchase"))
         val batch = EventBatch.plan(queue.toList()).first()
         assertEquals(listOf("q0", "q1", "q2", "q3"), batch.ids)
 
-        EventBatch.settle(queue, batch.ids, ok = false, maxRetries = 3)
-        assertEquals(listOf("q0", "q1", "q3", "q4"), queue.map { it.id })
-        assertEquals(listOf(1, 2, 1, 0), queue.map { it.retries })
+        EventBatch.settle(queue, batch.ids, SendRetry.Outcome.KEPT)
+        assertEquals(listOf("q0", "q1", "q2", "q3", "q4"), queue.map { it.id })
+        assertEquals(listOf(1, 2, 3, 1, 0), queue.map { it.retries })
 
-        // The next flush merges what is left the same way.
+        // The next flush merges them the same way.
         val again = EventBatch.plan(queue.toList()).first()
-        assertEquals(listOf("q0", "q1", "q3"), again.ids)
-        EventBatch.settle(queue, again.ids, ok = false, maxRetries = 3)
-        assertEquals(listOf("q0", "q3", "q4"), queue.map { it.id })
-        assertEquals(listOf(2, 2, 0), queue.map { it.retries })
+        assertEquals(listOf("q0", "q1", "q2", "q3"), again.ids)
+        EventBatch.settle(queue, again.ids, SendRetry.Outcome.KEPT)
+        assertEquals(listOf(2, 3, 4, 2, 0), queue.map { it.retries })
 
         // An entry gone from the queue meanwhile (clear(), the size cap) is skipped.
-        EventBatch.settle(queue, listOf("gone", "q0"), ok = false, maxRetries = 3)
-        assertEquals(listOf("q3", "q4"), queue.map { it.id })
+        queue.removeAt(0)
+        EventBatch.settle(queue, listOf("gone", "q0", "q1"), SendRetry.Outcome.KEPT)
+        assertEquals(listOf("q1", "q2", "q3", "q4"), queue.map { it.id })
+        assertEquals(listOf(4, 4, 2, 0), queue.map { it.retries })
     }
 }

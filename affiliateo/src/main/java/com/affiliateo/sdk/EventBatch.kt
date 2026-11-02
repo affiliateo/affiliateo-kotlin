@@ -70,24 +70,20 @@ internal object EventBatch {
     }
 
     /**
-     * What one request's answer does to the queue, for every entry it carried.
-     * A 2xx removes them all. Anything else (no answer, a 400, a 404 before
-     * the device is identified, a 5xx) is one failed try for each of them,
-     * and an entry on its [maxRetries]th failed try is dropped: the rule one
-     * entry always had, applied to each. An id no longer in the queue (clear(),
-     * or the size cap dropped it during the flush) is skipped.
+     * What one request's answer does to the queue, for every entry it carried
+     * (4.16.3, see SendRetry). Sent or refused removes them all. Kept is one
+     * more try for each of them, a record only: nothing is dropped for it (the
+     * third used to drop it). An id no longer in the queue (clear(), or the
+     * size cap dropped it during the flush) is skipped.
      */
-    fun settle(queue: MutableList<EventQueue.QueuedEvent>, ids: Collection<String>, ok: Boolean, maxRetries: Int) {
-        if (ok) {
-            val sent = ids.toHashSet()
-            queue.removeAll { it.id in sent }
+    fun settle(queue: MutableList<EventQueue.QueuedEvent>, ids: Collection<String>, outcome: SendRetry.Outcome) {
+        val carried = ids.toHashSet()
+        if (outcome != SendRetry.Outcome.KEPT) {
+            queue.removeAll { it.id in carried }
             return
         }
-        for (id in ids) {
-            val idx = queue.indexOfFirst { it.id == id }
-            if (idx < 0) continue
-            queue[idx].retries++
-            if (queue[idx].retries >= maxRetries) queue.removeAt(idx)
+        for (entry in queue) {
+            if (entry.id in carried) entry.retries++
         }
     }
 
