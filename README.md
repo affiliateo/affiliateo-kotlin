@@ -18,7 +18,7 @@ In your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.github.affiliateo:affiliateo-kotlin:4.16.3")
+    implementation("com.github.affiliateo:affiliateo-kotlin:4.17.0")
 }
 ```
 
@@ -247,6 +247,9 @@ Affiliateo.setChatBubbleLook(color = "#7C3AED", iconColor = "#FFFFFF", sendColor
 
 // The message box text in your own words and language (4.15.0): pass your own translation
 Affiliateo.setChatPlaceholder(getString(R.string.chat_placeholder))
+
+// How often the bubble wiggles, in seconds, over the dashboard's Wiggle setting (4.17.0); 0 or null is off
+Affiliateo.setChatBubbleWiggle(seconds = 45)
 ```
 
 - Nothing shows until your code calls `showChatBubble()` or `openChat()`, so
@@ -289,8 +292,104 @@ Affiliateo.setChatPlaceholder(getString(R.string.chat_placeholder))
   goes into a backup or to a new phone (4.15.4). Your inbox labels the thread with the
   device, the Affiliateo visitor and, after `identify()`, your user id; none
   of them while the person has opted out.
+- The bubble can wiggle to catch the eye (4.17.0): every so many seconds it
+  gives one short, smooth shake (about 0.9 s), then rests. You pick how often in the
+  Live Chat settings of your dashboard (Wiggle: Off, or every 10 to 60
+  seconds), or in code with `setChatBubbleWiggle(seconds)`: any whole number
+  from 3 up, and 0 or `null` for off. It only wiggles while it is on screen,
+  the chat is closed, the app is in front and nobody is dragging it, and never
+  while the phone has animations off (Remove animations).
 - Google Play Data safety: chat messages are **Messages, Other in-app
   messages**.
+
+### Replies as notifications (4.17.0)
+
+A reply from your team shows as a notification, like a text message: your
+Live Chat app's name, then the message. A tap opens your app with the chat on
+top, wherever the person was. Three small pieces, all optional:
+
+**1. While your app is open: nothing to add.** With the bubble on screen and
+the chat closed, a reply shows as a notification by itself, once the person
+allows your app's notifications.
+
+**2. While your app is closed: your push token.** Affiliateo sends the reply
+through Firebase Cloud Messaging. The SDK has no Firebase in it; your app
+hands it the token and each push:
+
+```kotlin
+// at launch, and whenever Firebase gives you a new token
+FirebaseMessaging.getInstance().token.addOnSuccessListener { Affiliateo.setChatPushToken(it) }
+
+class MyMessagingService : FirebaseMessagingService() {
+    override fun onNewToken(token: String) = Affiliateo.setChatPushToken(token)
+
+    override fun onMessageReceived(message: RemoteMessage) {
+        // true: a Live Chat reply, and its notification is showing
+        if (Affiliateo.handleChatPush(this, message.data)) return
+        // your own pushes
+    }
+}
+```
+
+**3. Open the chat from the notification.** In the activity your app starts
+with:
+
+```kotlin
+override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(savedInstanceState)
+    Affiliateo.handleChatIntent(this, intent)
+}
+
+override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    Affiliateo.handleChatIntent(this, intent)
+}
+```
+
+It answers true when a chat notification opened the app (and opens the chat),
+false for every other intent, so your own links carry on as before.
+
+And tell the SDK when the person allows notifications: right after they say
+yes to Android's question, and at each launch while they are allowed.
+
+```kotlin
+Affiliateo.chatNotificationsAllowed(context)
+```
+
+If your greeting still shows as unread for this person (the red 1), it then
+arrives as one notification, in their language, and a tap opens the chat. Once
+per greeting on a phone.
+
+- Your app declares `android.permission.POST_NOTIFICATIONS` and asks for it;
+  the SDK never asks.
+- The notifications show under one channel, "Support messages" (named in the
+  phone's language), which people can switch off in Android's settings.
+- The small icon is your app's own notification icon. Name it in your
+  manifest, with a color if you like:
+
+  ```xml
+  <meta-data android:name="com.affiliateo.sdk.chat_notification_icon" android:resource="@drawable/ic_notification" />
+  <meta-data android:name="com.affiliateo.sdk.chat_notification_color" android:resource="@color/brand" />
+  ```
+
+  Without them the SDK uses the icon and color your manifest names for
+  Firebase's notifications, else a plain speech bubble.
+- While the chat is open on screen no notification shows, and opening the
+  chat clears the ones still up.
+- The SDK registers the token with Affiliateo for this app and phone (with
+  the app's package name, the device id the chat already carries, the phone's
+  language and, when known, the Affiliateo visitor and your user id), and
+  again when the token, the language or the person changes. Nothing is
+  registered while Live Chat is off for the app or the person has opted out.
+  `logout()` has Affiliateo forget the phone, so a reply to the last person's
+  thread never shows to the next one; it registers again when the next person
+  starts a chat. `optOut()` has it forgotten too.
+- Pushes reach a phone only when Affiliateo can send to your app's Firebase
+  project. Until then the notification while the app is open (piece 1) still
+  works.
+- Google Play Data safety: the push token is a **Device or other ID**, used
+  for app functionality (so is the Firebase installation ID that Firebase
+  Cloud Messaging itself uses in your app).
 
 ## What it does
 

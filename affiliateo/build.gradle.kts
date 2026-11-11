@@ -10,6 +10,35 @@ plugins {
     id("maven-publish")
 }
 
+// 4.17.0: Live Chat replies as notifications, and a bubble that wiggles.
+//         A reply from the team shows as a notification (the Live Chat app's
+//         name, then the message; channel "Support messages", named in the
+//         phone's language; the app's own notification icon from the manifest
+//         meta-data com.affiliateo.sdk.chat_notification_icon, else
+//         Firebase's default icon, else a speech bubble). Three ways in:
+//         setChatPushToken(token) registers the app's FCM token with
+//         Affiliateo (POST /api/live-chat/push-devices; again when the token,
+//         language or person changes; forgotten on logout() and optOut()) and
+//         handleChatPush(context, data) draws the server's data-only push;
+//         while the app is open and no token is registered, a reply on the
+//         thread's socket shows the same notification. No Firebase in the
+//         SDK: the app passes the token and the push. A tap opens the app's
+//         first screen with an extra that handleChatIntent(activity, intent)
+//         answers by opening the chat on top (also after a cold start, and
+//         only once per tap). chatNotificationsAllowed(context) sends a
+//         greeting that still counts as unread as one notification, once per
+//         greeting. Opening the chat clears its notifications. The wiggle:
+//         the config's bubble.wiggle_seconds (the dashboard's Wiggle setting,
+//         0 = off, missing = off) or setChatBubbleWiggle(seconds) (3 at the
+//         least, 0 or null = off) gives the bubble one smooth 0.9 s shake
+//         (three swings that die down, drawn on every frame) every so many
+//         seconds, only while it is on screen, the chat closed, the app in
+//         front, no finger on it and animations on. Also a crash fix: an app
+//         that gives the bubble a page layer (chatBubbleLayer, since 4.15.2)
+//         crashed when its screen was made again while the bubble showed
+//         (a change of the app's language): the layer placed the bubble
+//         while Android was still attaching the screen's views. It is posted
+//         now.
 // 4.16.3: tracked events wait instead of being lost. When the server is busy
 //         or out of reach (no answer, a time out, 404, 408, 429 or 5xx) the
 //         queue keeps the events and tries again after 5 s, then 10, 20 and
@@ -155,7 +184,7 @@ plugins {
 // install (Meta / TikTok / Google Ads) gets its source labelled server-side
 // with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-version = "4.16.3"
+version = "4.17.0"
 
 android {
     namespace = "com.affiliateo.sdk"

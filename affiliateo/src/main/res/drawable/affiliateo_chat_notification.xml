@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The small icon of Live Chat's notifications (4.17.0, ChatNotifications.kt) in an app that
+     names none of its own: the chat bubble's speech bubble, white on clear as Android wants a
+     status bar icon. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,2.5C17.25,2.5 21.5,6.4 21.5,11.25C21.5,16.1 17.25,20 12,20C10.9,20 9.85,19.83 8.87,19.52C7.3,20.9 5.2,21.55 3.05,21.45C4.35,20.55 5.2,19.3 5.45,17.85C3.6,16.25 2.5,13.87 2.5,11.25C2.5,6.4 6.75,2.5 12,2.5Z" />
+</vector>

@@ -48,6 +48,11 @@ internal object ChatRules {
         val online: Boolean,
         /** The owner's corner, size and screens for the bubble. */
         val bubble: Bubble = Bubble.STANDARD,
+        /** The Live Chat app's name ("Copydraw"): the title of its notifications (4.17.0). */
+        val appName: String? = null,
+        /** The owner's greeting as written, and the versions they wrote for other languages ("es", "de"; the config's optional "greetings"), for the greeting notification (4.17.0). */
+        val greeting: String? = null,
+        val greetings: Map<String, String> = emptyMap(),
     ) {
         companion object {
             val OFF = Config(enabled = false, showBubble = false, online = false)
@@ -73,6 +78,8 @@ internal object ChatRules {
         /** The owner's circle color and the speech bubble's inside it, #rrggbb. */
         val color: String = "#1754d8",
         val iconColor: String = "#ffffff",
+        /** Seconds between the bubble's wiggles (4.17.0); 0 is off, and so is a config without the field. */
+        val wiggleSeconds: Int = 0,
     ) {
         companion object {
             val STANDARD = Bubble()
@@ -143,7 +150,24 @@ internal object ChatRules {
             showBubble = json.optBoolean("show_bubble", false),
             online = json.optBoolean("online", false),
             bubble = parseBubble(json.optJSONObject("bubble")),
+            appName = textOf(json.optJSONObject("app"), "name"),
+            greeting = textOf(json, "greeting"),
+            greetings = parseGreetings(json.optJSONObject("greetings")),
         )
+    }
+
+    /** A text field that is there and not empty (a JSON null reads as nothing, never as the word "null"). */
+    private fun textOf(json: JSONObject?, key: String): String? {
+        if (json == null || json.isNull(key)) return null
+        return (json.opt(key) as? String)?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    /** The greeting's versions by language, as the config carries them: {"es":"Hola","de":"Hallo"}. */
+    private fun parseGreetings(json: JSONObject?): Map<String, String> {
+        if (json == null) return emptyMap()
+        val out = LinkedHashMap<String, String>()
+        for (key in json.keys()) textOf(json, key)?.let { out[key.lowercase()] = it }
+        return out
     }
 
     /** The config's bubble, anything missing or odd read as the old fixed bubble. */
@@ -161,7 +185,7 @@ internal object ChatRules {
         val style = if (b.optString("style") == "glass") "glass" else "standard"
         val color = b.optString("color").takeIf { HEX.matches(it) } ?: "#1754d8"
         val iconColor = b.optString("icon_color").takeIf { HEX.matches(it) } ?: "#ffffff"
-        return Bubble(position, size, mode, rules, greetingId, phone, style, color, iconColor)
+        return Bubble(position, size, mode, rules, greetingId, phone, style, color, iconColor, wiggleSeconds(b.optInt("wiggle_seconds", 0)))
     }
 
     private val HEX = Regex("^#[0-9a-fA-F]{6}$")
@@ -568,27 +592,35 @@ internal object ChatRules {
      * languages Affiliateo speaks, English for any other (review E14). The same
      * words as the website's chat.js and the React Native and Swift SDKs.
      */
-    data class ChatWords(val chat: String, val close: String, val unreadPattern: String) {
+    data class ChatWords(
+        val chat: String,
+        val close: String,
+        val unreadPattern: String,
+        /** The name of the notifications' channel in Android's settings (4.17.0). */
+        val supportMessages: String,
+        /** A notification's line for a message with no words (4.17.0). */
+        val sentMessage: String,
+    ) {
         fun unread(count: Int): String = unreadPattern.replace("{n}", count.toString())
     }
 
     val CHAT_WORDS: Map<String, ChatWords> = mapOf(
-        "en" to ChatWords("Chat", "Close chat", "Chat, {n} unread"),
-        "ar" to ChatWords("الدردشة", "إغلاق الدردشة", "الدردشة، {n} غير مقروءة"),
-        "de" to ChatWords("Chat", "Chat schließen", "Chat, {n} ungelesen"),
-        "es" to ChatWords("Chat", "Cerrar chat", "Chat, {n} sin leer"),
-        "fr" to ChatWords("Chat", "Fermer le chat", "Chat, {n} non lus"),
-        "hi" to ChatWords("चैट", "चैट बंद करें", "चैट, {n} अपठित"),
-        "it" to ChatWords("Chat", "Chiudi chat", "Chat, {n} non letti"),
-        "ja" to ChatWords("チャット", "チャットを閉じる", "チャット、未読 {n} 件"),
-        "ko" to ChatWords("채팅", "채팅 닫기", "채팅, 읽지 않음 {n}개"),
-        "nl" to ChatWords("Chat", "Chat sluiten", "Chat, {n} ongelezen"),
-        "pl" to ChatWords("Czat", "Zamknij czat", "Czat, nieprzeczytane: {n}"),
-        "pt" to ChatWords("Chat", "Fechar chat", "Chat, {n} não lidas"),
-        "ru" to ChatWords("Чат", "Закрыть чат", "Чат, непрочитанных: {n}"),
-        "tr" to ChatWords("Sohbet", "Sohbeti kapat", "Sohbet, {n} okunmamış"),
-        "vi" to ChatWords("Trò chuyện", "Đóng trò chuyện", "Trò chuyện, {n} chưa đọc"),
-        "zh" to ChatWords("聊天", "关闭聊天", "聊天，{n} 条未读"),
+        "en" to ChatWords("Chat", "Close chat", "Chat, {n} unread", "Support messages", "Sent you a message"),
+        "ar" to ChatWords("الدردشة", "إغلاق الدردشة", "الدردشة، {n} غير مقروءة", "رسائل الدعم", "أرسل لك رسالة"),
+        "de" to ChatWords("Chat", "Chat schließen", "Chat, {n} ungelesen", "Support-Nachrichten", "Hat dir eine Nachricht gesendet"),
+        "es" to ChatWords("Chat", "Cerrar chat", "Chat, {n} sin leer", "Mensajes de ayuda", "Te envió un mensaje"),
+        "fr" to ChatWords("Chat", "Fermer le chat", "Chat, {n} non lus", "Messages d'aide", "Vous a envoyé un message"),
+        "hi" to ChatWords("चैट", "चैट बंद करें", "चैट, {n} अपठित", "सहायता संदेश", "आपको एक संदेश भेजा"),
+        "it" to ChatWords("Chat", "Chiudi chat", "Chat, {n} non letti", "Messaggi di assistenza", "Ti ha inviato un messaggio"),
+        "ja" to ChatWords("チャット", "チャットを閉じる", "チャット、未読 {n} 件", "サポートからのメッセージ", "メッセージが届きました"),
+        "ko" to ChatWords("채팅", "채팅 닫기", "채팅, 읽지 않음 {n}개", "고객 지원 메시지", "메시지를 보냈습니다"),
+        "nl" to ChatWords("Chat", "Chat sluiten", "Chat, {n} ongelezen", "Hulpberichten", "Heeft je een bericht gestuurd"),
+        "pl" to ChatWords("Czat", "Zamknij czat", "Czat, nieprzeczytane: {n}", "Wiadomości od pomocy", "Masz nową wiadomość"),
+        "pt" to ChatWords("Chat", "Fechar chat", "Chat, {n} não lidas", "Mensagens de ajuda", "Enviou uma mensagem para você"),
+        "ru" to ChatWords("Чат", "Закрыть чат", "Чат, непрочитанных: {n}", "Сообщения поддержки", "Вам пришло сообщение"),
+        "tr" to ChatWords("Sohbet", "Sohbeti kapat", "Sohbet, {n} okunmamış", "Destek mesajları", "Size bir mesaj gönderdi"),
+        "vi" to ChatWords("Trò chuyện", "Đóng trò chuyện", "Trò chuyện, {n} chưa đọc", "Tin nhắn hỗ trợ", "Đã gửi cho bạn một tin nhắn"),
+        "zh" to ChatWords("聊天", "关闭聊天", "聊天，{n} 条未读", "客服消息", "给你发了一条消息"),
     )
 
     /** The words for a language tag ("pt-BR", "zh-Hans-CN"): its first two letters. */
@@ -631,6 +663,265 @@ internal object ChatRules {
         val host = uri.host ?: return null
         if (scheme != "https" && scheme != "http") return null
         return if (uri.port == -1) "$scheme://$host" else "$scheme://$host:${uri.port}"
+    }
+
+    // ── The wiggle (4.17.0) ───────────────────────────────────────────────
+
+    /** The shortest wait between two wiggles, in seconds: anything shorter the code asks for becomes this. */
+    const val WIGGLE_MIN_SECONDS = 3
+    /** The longest wait between two wiggles, in seconds (an hour, as in the other SDKs). */
+    const val WIGGLE_MAX_SECONDS = 3600
+    /** How long one wiggle takes, in milliseconds. */
+    const val WIGGLE_MS = 900L
+    /**
+     * The numbers of one wiggle, the same on the website's bubble and in the
+     * React Native and Swift SDKs, so it looks alike everywhere (KEEP IN
+     * STEP): how far the turn would go without dying down, in degrees; how
+     * many times it swings left and right; how fast the swings die down; and
+     * how much the bubble grows at the middle of the wiggle.
+     */
+    private const val WIGGLE_DEGREES = 16.0
+    private const val WIGGLE_SWINGS = 3
+    private const val WIGGLE_FADE = 1.2
+    private const val WIGGLE_GROW = 0.06
+
+    /**
+     * Seconds between wiggles as asked for, by the dashboard's setting
+     * (bubble.wiggle_seconds: 0, 10, 20 ... 60) or the app's own code
+     * (setChatBubbleWiggle, any whole number): nothing, 0 or less is off, 1
+     * and 2 become [WIGGLE_MIN_SECONDS].
+     */
+    fun wiggleSeconds(asked: Int?): Int = when {
+        asked == null || asked <= 0 -> 0
+        asked < WIGGLE_MIN_SECONDS -> WIGGLE_MIN_SECONDS
+        else -> minOf(asked, WIGGLE_MAX_SECONDS)
+    }
+
+    /**
+     * Seconds between wiggles on this phone, 0 for none: what the app's own
+     * code set ([codeSeconds], already through [wiggleSeconds]; null while
+     * the code has no say), else the dashboard's.
+     */
+    fun wiggleEvery(codeSeconds: Int?, dashboardSeconds: Int): Int = codeSeconds ?: wiggleSeconds(dashboardSeconds)
+
+    /**
+     * Whether the bubble wiggles now that its wait is over: only while it is
+     * on screen in the window the person is looking at, the chat is closed,
+     * the app is in front and no finger is on it, and never while the phone
+     * has animations off (Remove animations, or the animator scale at 0).
+     */
+    fun wiggles(everySeconds: Int, bubbleOnScreen: Boolean, chatOpen: Boolean, appInFront: Boolean, touched: Boolean, animationsOn: Boolean): Boolean =
+        everySeconds > 0 && bubbleOnScreen && !chatOpen && appInFront && !touched && animationsOn
+
+    /**
+     * How far the bubble is turned, in degrees, at [fraction] (0 to 1) of one
+     * wiggle: 16 * sin(6 * PI * p) * (1 - p)^1.2. Three full swings left and
+     * right that die down smoothly (about 14 degrees at first, about 1 at
+     * the end), level at both ends. Read on every frame, never as a handful
+     * of steps: that is what keeps it smooth.
+     */
+    fun wiggleDegrees(fraction: Float): Float {
+        val p = fraction.coerceIn(0f, 1f).toDouble()
+        if (p == 0.0 || p == 1.0) return 0f
+        return (WIGGLE_DEGREES * Math.sin(2 * WIGGLE_SWINGS * Math.PI * p) * Math.pow(1 - p, WIGGLE_FADE)).toFloat()
+    }
+
+    /**
+     * How big the bubble is at [fraction] of one wiggle, 1 being its own
+     * size: 1 + 0.06 * sin(PI * p). It grows a touch, then settles back.
+     */
+    fun wiggleScale(fraction: Float): Float {
+        val p = fraction.coerceIn(0f, 1f).toDouble()
+        if (p == 0.0 || p == 1.0) return 1f
+        return (1 + WIGGLE_GROW * Math.sin(Math.PI * p)).toFloat()
+    }
+
+    // ── Notifications (4.17.0) ────────────────────────────────────────────
+
+    /** The channel a reply's notification shows under ("Support messages" in Android's settings). */
+    const val NOTICE_CHANNEL = "affiliateo_chat"
+    /** The longest a notification's line is, as the server cuts a push. */
+    const val NOTICE_BODY_MAX = 180
+
+    /** Kept while the server holds a registration for this phone: a fingerprint of what it took ([pushDeviceSignature]). */
+    fun pushKey(appId: String) = "affiliateo_chat_push_$appId"
+    /** Set from a sign-out until the next thread starts: this phone gets no pushes meanwhile. */
+    fun pushHoldKey(appId: String) = "affiliateo_chat_push_hold_$appId"
+    /** Set while the server still has to forget this phone (a sign-out or an opt-out it has not heard). */
+    fun pushForgetKey(appId: String) = "affiliateo_chat_push_forget_$appId"
+    /** The id of the greeting this phone already got a notification for. */
+    fun greetingNotifiedKey(appId: String) = "affiliateo_chat_greeting_notified_$appId"
+    /** The notifications whose tap already opened the chat. */
+    const val OPENED_KEY = "affiliateo_chat_opened"
+
+    /** A push token as the app hands it over: trimmed, its case untouched; null when empty or longer than the server takes (2048). */
+    fun pushToken(token: String?): String? = token?.trim()?.takeIf { it.isNotEmpty() && it.length <= 2048 }
+
+    /** How long the phone waits after a call that got no answer (offline) before it tries the server again. */
+    const val PUSH_RETRY_MS = 5 * 60_000L
+
+    /** What the server said to a call about this phone's token (ChatPushApi). */
+    enum class PushAnswer {
+        /** {"ok":true}. */
+        OK,
+
+        /** It answered, and did not take it: {"ok":false} (an app it does not know, a chat that is off), or a server without the route. */
+        REFUSED,
+
+        /** Too many requests, or the server failed: not asked again this launch. */
+        BUSY,
+
+        /** No answer at all (offline): worth another try later. */
+        NONE,
+    }
+
+    /** What an HTTP answer to a call about this phone's token means. */
+    fun pushAnswer(status: Int, body: String?): PushAnswer = when {
+        status in 200..299 -> if (parseOk(body ?: "")) PushAnswer.OK else PushAnswer.REFUSED
+        status == 408 || status == 429 || status >= 500 -> PushAnswer.BUSY
+        else -> PushAnswer.REFUSED
+    }
+
+    /**
+     * What registers this phone for the chat's pushes (POST
+     * /api/live-chat/push-devices). Null when nothing may be sent: no token,
+     * no device id, or the person has opted out of tracking (their chat
+     * carries no device id then, so no push could find this phone).
+     */
+    fun pushDeviceBody(env: Env, token: String?, packageName: String, language: String): JSONObject? {
+        val clean = pushToken(token) ?: return null
+        if (env.optedOut) return null
+        val device = env.deviceId?.takeIf { it.isNotEmpty() } ?: return null
+        return JSONObject().apply {
+            put("app", env.appId)
+            put("platform", "android")
+            put("token", clean)
+            put("bundle_id", packageName)
+            put("device_id", device)
+            env.visitorId?.takeIf { it.isNotEmpty() }?.let { put("visitor_id", it) }
+            env.userId?.takeIf { it.isNotEmpty() }?.let { put("user_id", it) }
+            put("language", language)
+        }
+    }
+
+    /**
+     * A fingerprint of a registration (the SHA-256 of its fields in a fixed
+     * order). The phone registers once per launch, and again in the same
+     * launch only when the fingerprint changes (a new token, app, language
+     * or person). The token itself is never kept on the phone by the SDK.
+     */
+    fun pushDeviceSignature(body: JSONObject): String {
+        val fields = listOf("app", "platform", "token", "bundle_id", "device_id", "visitor_id", "user_id", "language")
+        val text = fields.joinToString("\n") { key -> if (body.isNull(key)) "" else body.optString(key) }
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }
+    }
+
+    /** What makes the server forget this phone (DELETE /api/live-chat/push-devices). */
+    fun pushForgetBody(appId: String, token: String): JSONObject = JSONObject().put("app", appId).put("token", token)
+
+    /** Whether the server took a registration: {"ok":true}. An unknown app, or one with its chat off, answers {"ok":false}. */
+    fun parseOk(text: String): Boolean = try {
+        JSONObject(text).optBoolean("ok", false)
+    } catch (e: Exception) {
+        false
+    }
+
+    /** The server's push for a reply (FCM data, all text). */
+    data class ChatPush(val title: String?, val body: String?, val messageId: String?, val conversationId: String?, val app: String?)
+
+    /**
+     * A push's data as a chat push; null when it is not one of Affiliateo's
+     * (the app's own pushes pass through). Told by the "affiliateo_chat" key
+     * alone: its "app" is the app's id on Affiliateo, which need not be the
+     * name this app was configured with.
+     */
+    fun chatPush(data: Map<String, String>): ChatPush? {
+        if (!data.containsKey("affiliateo_chat")) return null
+        fun value(key: String) = data[key]?.trim()?.takeIf { it.isNotEmpty() }
+        return ChatPush(value("title"), value("body"), value("message_id"), value("conversation_id"), value("app"))
+    }
+
+    /** A reply from the team as it arrives on the thread's socket, for the notification shown while the app is open. */
+    data class TeamMessage(val id: String?, val body: String)
+
+    /** The team's message in a frame from the thread's socket; null for any other frame. */
+    fun teamMessage(text: String): TeamMessage? {
+        if (parseThreadFrame(text) != ThreadFrame.TEAM_MESSAGE) return null
+        val message = JSONObject(text).optJSONObject("message") ?: return null
+        val id = if (message.isNull("id")) null else message.optString("id").takeIf { it.isNotEmpty() }
+        val body = if (message.isNull("body")) "" else message.optString("body")
+        return TeamMessage(id, body)
+    }
+
+    /**
+     * Whether a push for a reply shows its notification: not while the chat
+     * is open on screen, where the reply shows itself.
+     */
+    fun showsPush(chatOpen: Boolean, appInFront: Boolean): Boolean = !(chatOpen && appInFront)
+
+    /**
+     * Whether a reply that came in on the socket shows a notification of the
+     * SDK's own: only while the app is in front with the chat closed, and
+     * only on a phone the server sends no push to (it would show twice).
+     */
+    fun showsLocalNotice(pushRegistered: Boolean, chatOpen: Boolean, appInFront: Boolean): Boolean =
+        !pushRegistered && !chatOpen && appInFront
+
+    /** A notification's title: the Live Chat app's name, from the push, else the config, else the app's own name. */
+    fun noticeTitle(pushTitle: String?, configName: String?, appLabel: String): String =
+        pushTitle?.trim()?.takeIf { it.isNotEmpty() } ?: configName?.trim()?.takeIf { it.isNotEmpty() } ?: appLabel
+
+    /**
+     * A notification's line: the message, cut to [NOTICE_BODY_MAX] characters
+     * (never through the middle of an emoji); "Sent you a message" in the
+     * person's language for a message with no words.
+     */
+    fun noticeBody(body: String?, languageTag: String): String {
+        val clean = (body ?: "").trim()
+        if (clean.isEmpty()) return chatWords(languageTag).sentMessage
+        if (clean.length <= NOTICE_BODY_MAX) return clean
+        var end = NOTICE_BODY_MAX - 1
+        if (Character.isHighSurrogate(clean[end - 1])) end--
+        return clean.substring(0, end).trimEnd() + "\u2026"
+    }
+
+    /** The tag one message's notification goes by, so the same message never shows twice; null without an id. */
+    fun noticeTag(messageId: String?): String? = messageId?.takeIf { it.isNotEmpty() }?.let { "message:$it" }
+
+    /** The greeting notification's tag: there is only ever one. */
+    const val GREETING_TAG = "greeting"
+
+    /** The greeting a person in this language sees: their language's version, else the owner's main text; null when neither is written. */
+    fun greetingText(config: Config, languageTag: String): String? =
+        (config.greetings[languageTag.lowercase().take(2)] ?: config.greeting)?.trim()?.takeIf { it.isNotEmpty() }
+
+    /**
+     * Whether the greeting goes out as a notification now: notifications are
+     * allowed, the greeting still counts as unread ([pending]: the rule that
+     * shows the red 1), the chat is not open, and this greeting has not been
+     * sent as a notification on this phone before.
+     */
+    fun notifiesGreeting(allowed: Boolean, pending: Boolean, greetingId: String?, notifiedId: String?, text: String?, chatOpen: Boolean): Boolean =
+        allowed && pending && !chatOpen && !greetingId.isNullOrEmpty() && greetingId != notifiedId && !text.isNullOrEmpty()
+
+    /** Whether a notification's tap (its [nonce]) already opened the chat, going by the saved list. */
+    fun wasOpened(saved: String?, nonce: String): Boolean = openedList(saved).contains(nonce)
+
+    /** The saved list with [nonce] added: the last [keep] taps, as JSON. */
+    fun rememberOpened(saved: String?, nonce: String, keep: Int = 20): String {
+        val list = (openedList(saved).filter { it != nonce } + nonce).takeLast(keep.coerceAtLeast(1))
+        return org.json.JSONArray(list).toString()
+    }
+
+    private fun openedList(saved: String?): List<String> {
+        if (saved.isNullOrEmpty()) return emptyList()
+        return try {
+            val array = org.json.JSONArray(saved)
+            (0 until array.length()).mapNotNull { array.opt(it) as? String }
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

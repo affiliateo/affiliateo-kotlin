@@ -3,6 +3,7 @@ package com.affiliateo.sdk
 import android.app.Activity
 import android.app.Application
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import kotlinx.coroutines.*
@@ -403,7 +404,10 @@ object Affiliateo {
      * (or nobody) is not counted as the person who just left, and everything
      * already recorded stays with them. Forgets the stored user id, their
      * email hash, the saved free access answer and (4.14.2) their Live Chat
-     * thread: the next person to open the chat starts a new one.
+     * thread: the next person to open the chat starts a new one. Replies to
+     * the thread they leave behind stop arriving on this phone as
+     * notifications (4.17.0): the server forgets the phone's push token until
+     * the next person starts a chat of their own.
      *
      * Tracking carries on: same device id, same visitor id, same
      * obfuscatedAccountId, nothing to restart. A sign-out made offline (or
@@ -445,6 +449,7 @@ object Affiliateo {
      * SharedPreferences and silences ALL subsequent page / track /
      * identify calls until optIn() is called. Survives app restart.
      * Pending queued events are dropped. Use for GDPR/CCPA consent.
+     * The server also forgets this phone's Live Chat push token (4.17.0).
      */
     @JvmStatic
     fun optOut() {
@@ -454,6 +459,8 @@ object Affiliateo {
         ctx.getSharedPreferences(OPT_OUT_PREFS, Context.MODE_PRIVATE)
             .edit().putString(OPT_OUT_KEY, "true").apply()
         queue?.clear()
+        // The server forgets this phone's Live Chat push token (4.17.0).
+        LiveChat.optedOut()
     }
 
     /**
@@ -468,6 +475,8 @@ object Affiliateo {
         optedOut = false
         ctx.getSharedPreferences(OPT_OUT_PREFS, Context.MODE_PRIVATE)
             .edit().remove(OPT_OUT_KEY).apply()
+        // Live Chat's pushes may reach this phone again (4.17.0).
+        LiveChat.optedIn()
     }
 
     /**
@@ -584,6 +593,125 @@ object Affiliateo {
      * ```
      */
     fun setChatPlaceholder(text: String?) = LiveChat.setPlaceholder(ChatRules.placeholder(text))
+
+    /**
+     * How often the chat bubble wiggles (4.17.0), in seconds, over the Wiggle
+     * setting in your dashboard's Live Chat settings: any whole number, 3 at
+     * the least (1 and 2 become 3); 0 or null switches the wiggle off. Never
+     * calling this keeps the dashboard's choice.
+     *
+     * ```kotlin
+     * Affiliateo.setChatBubbleWiggle(seconds = 45)
+     * ```
+     *
+     * A wiggle is one short, smooth shake (about 0.9 s: three swings left and
+     * right that die down, the bubble a touch bigger in the middle), then
+     * the bubble rests until the next one. Only
+     * while the bubble is on screen, the chat is closed, the app is in front
+     * and nobody is dragging it. Never while the phone has animations off
+     * (Remove animations in Accessibility, or the animator scale at 0).
+     */
+    fun setChatBubbleWiggle(seconds: Int?) = LiveChat.setWiggle(seconds)
+
+    /**
+     * Hand over your app's push token (4.17.0), so a reply from your team
+     * reaches the person as a notification while the app is closed too. The
+     * token is Firebase Cloud Messaging's; the SDK itself has no Firebase in
+     * it, your app gets the token and passes it on:
+     *
+     * ```kotlin
+     * FirebaseMessaging.getInstance().token.addOnSuccessListener { Affiliateo.setChatPushToken(it) }
+     *
+     * class MyMessagingService : FirebaseMessagingService() {
+     *     override fun onNewToken(token: String) = Affiliateo.setChatPushToken(token)
+     *     override fun onMessageReceived(message: RemoteMessage) {
+     *         if (Affiliateo.handleChatPush(this, message.data)) return
+     *         // your own pushes
+     *     }
+     * }
+     * ```
+     *
+     * The SDK registers it with Affiliateo for this app and phone, and again
+     * whenever the token, the language or the signed-in person changes (right
+     * after [identify]: a reply reaches only the phone registered for the
+     * person its thread belongs to). Safe
+     * to call at every launch and before [configure]. Nothing is registered
+     * while Live Chat is off for this app or the person has opted out;
+     * [logout] has the server forget the phone until the next person starts a
+     * chat of their own.
+     */
+    fun setChatPushToken(token: String) = LiveChat.setPushToken(token)
+
+    /**
+     * Pass every push your messaging service receives (4.17.0). True: it was a
+     * Live Chat reply, and the SDK has shown its notification (the Live Chat
+     * app's name, then the message), unless the chat is open on screen.
+     * False: not one of Affiliateo's, so handle it as your own.
+     *
+     * The notification shows under the channel "Support messages" (named in
+     * the phone's language), with your app's own notification icon: the
+     * drawable your manifest names, with an optional color.
+     *
+     * ```xml
+     * <meta-data android:name="com.affiliateo.sdk.chat_notification_icon" android:resource="@drawable/ic_notification" />
+     * <meta-data android:name="com.affiliateo.sdk.chat_notification_color" android:resource="@color/brand" />
+     * ```
+     *
+     * Without them it uses the icon and color your manifest names for
+     * Firebase's notifications, else a plain speech bubble. Safe from any
+     * thread, and before [configure] (Android may start your app just for the
+     * push).
+     */
+    fun handleChatPush(context: Context, data: Map<String, String>): Boolean = LiveChat.handlePush(context, data)
+
+    /**
+     * Open the chat when one of its notifications opened your app (4.17.0).
+     * Call it from the activity your app starts with, in onCreate and in
+     * onNewIntent:
+     *
+     * ```kotlin
+     * override fun onCreate(savedInstanceState: Bundle?) {
+     *     super.onCreate(savedInstanceState)
+     *     Affiliateo.handleChatIntent(this, intent)
+     * }
+     *
+     * override fun onNewIntent(intent: Intent) {
+     *     super.onNewIntent(intent)
+     *     Affiliateo.handleChatIntent(this, intent)
+     * }
+     * ```
+     *
+     * True when [intent] came from a chat notification's tap: the chat opens
+     * on top of whatever your app shows, right away or as soon as [configure]
+     * has run. Your app stays where it was. False for every other intent, so
+     * your own links carry on as before; also false when Android hands the
+     * same intent back later (the screen made again, or the app reopened from
+     * the recent apps), so one tap opens the chat once.
+     */
+    fun handleChatIntent(activity: Activity, intent: Intent?): Boolean = LiveChat.handleIntent(activity, intent)
+
+    /**
+     * Tell the SDK the person allows notifications (4.17.0): call it right
+     * after they say yes to Android's question, and at each launch while
+     * notifications are allowed.
+     *
+     * ```kotlin
+     * val ask = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+     *     if (granted) Affiliateo.chatNotificationsAllowed(this)
+     * }
+     * ```
+     *
+     * If your greeting still counts as unread for this person (the red 1 on
+     * the bubble: nobody has opened the chat on this phone yet), it arrives
+     * as one notification, with your Live Chat app's name and the greeting in
+     * their language; a tap opens the chat. Once per greeting on a phone,
+     * and the red 1 stays until the chat is opened. Called before the chat's
+     * settings have loaded, it happens when they arrive. It does nothing
+     * while notifications are in fact off. Your app declares
+     * `android.permission.POST_NOTIFICATIONS` and asks for it; the SDK never
+     * asks itself.
+     */
+    fun chatNotificationsAllowed(context: Context) = LiveChat.notificationsAllowed(context)
 
     /**
      * Open the chat from your own button (4.14.0), full screen over [activity].
@@ -714,6 +842,7 @@ object Affiliateo {
         // (Before configure() there is no thread to reach: configure forgets
         // it then.)
         if (ChatRules.switchesPerson(this.userId, uid)) LiveChat.forget()
+        val personChanged = this.userId != uid
         if (this.userId != uid) {
             // Somebody else: their own email (or none), and no free access
             // answer that belonged to the person before.
@@ -728,6 +857,10 @@ object Affiliateo {
         // different person signing in switches the device anyway.
         logoutPending = false
         saveUserState()
+        // The phone's push registration names who is signed in (4.17.0): the
+        // server sends a reply only to the phone registered for the person the
+        // thread belongs to, so it hears of a sign-in at once.
+        if (personChanged) LiveChat.personChanged()
         // Before configure(): sent once configure's identify has finished.
         scope?.launch {
             // Already confirmed this launch: nothing to send.
@@ -860,6 +993,7 @@ object Affiliateo {
                         userId = null
                         emailHash = null
                         saveUserState()
+                        LiveChat.personChanged()
                         return
                     }
                     IdentifyUserResult.NotLinked -> {

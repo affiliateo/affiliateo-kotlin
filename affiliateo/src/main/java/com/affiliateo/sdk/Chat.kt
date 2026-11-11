@@ -1,5 +1,8 @@
 package com.affiliateo.sdk
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.Application
@@ -14,6 +17,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
@@ -23,6 +27,7 @@ import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.WindowInsets
+import android.view.animation.LinearInterpolator
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.TextView
@@ -75,6 +80,14 @@ import java.util.Locale
  * no-backup folder (4.15.4, review S18; ChatTokenStore), never in a backup.
  * Affiliateo.logout() drops it (4.14.2), so the next person on the phone
  * starts a new thread.
+ *
+ * Since 4.17.0 a reply also shows as a notification (ChatNotifications.kt):
+ * from the server's push when the app hands one over (handlePush), or from
+ * the thread's socket while the app is open and the server has no push token
+ * for this phone. The greeting shows as one too, once, right after the app
+ * says notifications are allowed (notificationsAllowed). A tap opens the app
+ * with the chat on top (handleIntent). And the bubble wiggles every so often
+ * when the owner (or the app's code) asks for it.
  */
 internal object LiveChat {
     private const val LOG_TAG = "Affiliateo"
@@ -91,10 +104,11 @@ internal object LiveChat {
 
     private var installed = false
     private var resumed: WeakReference<Activity>? = null
-    private var startedCount = 0
+    /** Written on the main thread; read by handlePush on whichever thread the app's messaging service runs. */
+    @Volatile private var startedCount = 0
 
-    // Main thread only from here on.
-    private var config: ChatRules.Config? = null
+    // Written on the main thread only from here on.
+    @Volatile private var config: ChatRules.Config? = null
     private var configCheckedAt = 0L
     private var configJob: Deferred<ChatRules.Config>? = null
     private var unreadCheckedAt = 0L
@@ -112,7 +126,7 @@ internal object LiveChat {
     private var look = ChatRules.BubbleLook()
     /** The app's own message box text (setChatPlaceholder), over the dashboard's. */
     private var placeholder: String? = null
-    private var screenOpen = false
+    @Volatile private var screenOpen = false
     /** The chat screen while it is up, so a sign-out can close it. */
     private var chatScreen: WeakReference<ChatActivity>? = null
     private var poll: Job? = null
@@ -131,6 +145,35 @@ internal object LiveChat {
     private var appPing: Job? = null
     /** The server refused the app channel (no such app, or the chat is off): not tried again until a config read says the chat is on. */
     private var appRefused = false
+
+    // The wiggle (4.17.0).
+    /** The app's own seconds between wiggles (setChatBubbleWiggle); null while the code has no say. */
+    private var wiggleCode: Int? = null
+    /** Seconds between wiggles while the timer runs; 0 while it does not. */
+    private var wiggleEvery = 0
+
+    // Notifications (4.17.0).
+    /** The push token the app handed over this launch (setChatPushToken). */
+    private var pushToken: String? = null
+    /** The server holds that token for this phone, so replies arrive as pushes and the SDK shows none of its own. */
+    @Volatile private var pushRegistered = false
+    /** The registration the server took this launch (its fingerprint): sent again only when it changes. */
+    private var pushSent: String? = null
+    /** A registration the server did not take this launch (its fingerprint): not sent again until the next launch. */
+    private var pushRefused: String? = null
+    /** The server did not take this launch's "forget" either (busy): not sent again until the next launch. */
+    private var forgetRefused = false
+    /** When a call about the token last got no answer at all (offline); the next try waits ChatRules.PUSH_RETRY_MS. */
+    private var pushNoAnswerAt = 0L
+    /** Goes up when the phone is to be forgotten, so an answer still on its way registers nothing. */
+    private var pushEpoch = 0
+    /** The calls to the server about this phone's token, one after the other. */
+    private var pushWork: Job? = null
+    /** The app said notifications are allowed (chatNotificationsAllowed), this launch. */
+    private var noticesAllowed = false
+    /** A notification's tap asked for the chat before there was a screen (or configure()) to open it over. */
+    private var openAsked = false
+    private var openOver: WeakReference<Activity>? = null
 
     private val env: ChatRules.Env? get() = Affiliateo.chatEnv()
 
@@ -157,13 +200,18 @@ internal object LiveChat {
                 startedCount--
                 if (startedCount == 0) {
                     stopLive()
+                    syncWiggle(false)
                     syncAppChannel()
                 }
             }
 
             override fun onActivityResumed(activity: Activity) {
                 resumed = WeakReference(activity)
-                if (activity !is ChatActivity) placeBubble()
+                if (activity !is ChatActivity) {
+                    placeBubble()
+                    // A notification's tap from before this screen was up.
+                    openIfAsked()
+                }
             }
 
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
@@ -173,6 +221,13 @@ internal object LiveChat {
         })
         // A showChatBubble() made before configure().
         if (wantsBubble) showBubble()
+        // And what else waited for configure() (4.17.0): a push token, "notifications
+        // are allowed" (both need the config, which showBubble() above may already
+        // be fetching), and a notification's tap.
+        onMain {
+            if (pushToken != null || noticesAllowed) scope.launch { refreshConfig(force = false) }
+            openIfAsked()
+        }
     }
 
     // ── What the app calls ────────────────────────────────────────────────
@@ -189,6 +244,8 @@ internal object LiveChat {
                 val answer = ChatRules.parseConfig(saved)
                 if (answer.enabled) {
                     config = answer
+                    // The greeting's red 1 comes with it (4.17.0): the kept answer says whether it counts.
+                    noteGreeting(answer, e)
                     placeBubble()
                 }
             }
@@ -208,6 +265,125 @@ internal object LiveChat {
     fun setPlaceholder(text: String?) = onMain {
         placeholder = text
     }
+
+    /** The app's own seconds between wiggles, over the dashboard's (0: never). */
+    fun setWiggle(seconds: Int?) = onMain {
+        wiggleCode = ChatRules.wiggleSeconds(seconds)
+        syncWiggle(bubbleIn(resumed?.get()) != null)
+    }
+
+    // ── Notifications: what the app calls (4.17.0) ─────────────────────────
+
+    /** The app's push token (FCM): registered with the server now, or once configure() and the config are there. */
+    fun setPushToken(token: String) = onMain {
+        val clean = ChatRules.pushToken(token) ?: return@onMain
+        if (clean != pushToken) {
+            pushToken = clean
+            pushRegistered = false
+        }
+        if (env == null) return@onMain
+        if (config == null) scope.launch { refreshConfig(force = false) } else syncPush()
+    }
+
+    /**
+     * A push the app's messaging service received. False: not one of the
+     * chat's. True: it was, and its notification is up, unless the chat is
+     * open on screen. Runs on the caller's thread, and needs no configure():
+     * the push carries its own words (Android may have just started the app
+     * for it).
+     */
+    fun handlePush(context: Context, data: Map<String, String>): Boolean {
+        val push = ChatRules.chatPush(data) ?: return false
+        val open = screenOpen
+        val inFront = startedCount > 0
+        if (!ChatRules.showsPush(open, inFront)) return true
+        val app = context.applicationContext
+        ChatNotices.post(
+            app,
+            tag = ChatRules.noticeTag(push.messageId),
+            title = ChatRules.noticeTitle(push.title, config?.appName, ChatNotices.appLabel(app)),
+            body = ChatRules.noticeBody(push.body, Locale.getDefault().toLanguageTag()),
+            chatScreenUp = open,
+        )
+        return true
+    }
+
+    /**
+     * The app's screen was opened with [intent]. True when one of the chat's
+     * notifications opened it: the chat then opens on top, now or as soon as
+     * configure() has run and a screen is up. False for any other intent, for
+     * a tap that already opened the chat (Android hands the same intent back
+     * when it makes the screen again), and when the app is brought back from
+     * the recent apps.
+     */
+    fun handleIntent(activity: Activity, intent: Intent?): Boolean {
+        val nonce = try {
+            intent?.getStringExtra(ChatNotices.EXTRA_OPEN)
+        } catch (e: Exception) {
+            null
+        }
+        if (intent == null || nonce.isNullOrEmpty()) return false
+        if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return false
+        val store = prefs(activity)
+        val saved = store.getString(ChatRules.OPENED_KEY, null)
+        if (ChatRules.wasOpened(saved, nonce)) return false
+        store.edit().putString(ChatRules.OPENED_KEY, ChatRules.rememberOpened(saved, nonce)).apply()
+        val over = WeakReference(activity)
+        onMain {
+            openAsked = true
+            openOver = over
+            openIfAsked()
+        }
+        return true
+    }
+
+    /** Opens the chat a notification's tap asked for, once configure() has run and there is a screen to open it over. */
+    private fun openIfAsked() {
+        if (!openAsked || env == null) return
+        if (screenOpen) {
+            openAsked = false
+            openOver = null
+            return
+        }
+        fun usable(activity: Activity?) = activity?.takeIf { it !is ChatActivity && !it.isFinishing && !it.isDestroyed }
+        val activity = usable(openOver?.get()) ?: usable(resumed?.get()) ?: return
+        openAsked = false
+        openOver = null
+        open(activity)
+    }
+
+    /**
+     * The person allows notifications (the app calls this right after they
+     * say yes, and at each launch while they still do): a greeting that still
+     * counts as unread goes out as one notification, now or when the config
+     * arrives.
+     */
+    fun notificationsAllowed(context: Context) {
+        // Asked of Android itself: a call made too early changes nothing.
+        if (!ChatNotices.allowed(context.applicationContext)) return
+        onMain {
+            noticesAllowed = true
+            if (env == null) return@onMain
+            scope.launch {
+                refreshConfig(force = false)
+                notifyGreeting()
+            }
+        }
+    }
+
+    /**
+     * Who is signed in changed without a sign-out (anonymous to signed in):
+     * the phone registers again with their id at once, because the server
+     * pushes a reply only to the phone registered for the person the thread
+     * belongs to. (A switch between two people is a sign-out: forget().)
+     */
+    fun personChanged() = onMain { syncPush() }
+
+    /** The person opted out of tracking: the server forgets this phone's push token (their chat carries no device id from now on). */
+    fun optedOut() = onMain { forgetPush(hold = false) }
+
+    /** They opted back in: the phone may be registered again. */
+    fun optedIn() = onMain { syncPush() }
 
     fun setBottomPadding(dp: Int) = onMain {
         bottomPaddingDp = dp.coerceIn(0, 400)
@@ -267,6 +443,10 @@ internal object LiveChat {
             visitorOnline = false
             setUnread(0)
             chatScreen?.get()?.finish()
+            // Their replies stop coming to this phone as pushes, and the ones
+            // already showing go (4.17.0). The next person's thread registers it again.
+            forgetPush(hold = true)
+            ChatNotices.clear(ctx)
         }
     }
 
@@ -313,9 +493,20 @@ internal object LiveChat {
         config = answer
         configCheckedAt = System.currentTimeMillis()
         noteGreeting(answer, e)
+        // A bubble already on screen shows the greeting's red 1 now (4.17.0):
+        // more than one caller can wait for the same answer, and the one that
+        // placed the bubble may have run before this line.
+        paintBubble()
         // The chat is on: the app channel may be tried again.
         if (answer.enabled) appRefused = false
+        afterConfig()
         return answer
+    }
+
+    /** What waits for a config (4.17.0): the phone's push registration and the greeting's notification. */
+    private fun afterConfig() {
+        syncPush()
+        notifyGreeting()
     }
 
     /** Somebody who already wrote has seen the greeting. */
@@ -345,6 +536,7 @@ internal object LiveChat {
             chatScreen?.get()?.finish()
         }
         placeBubble()
+        afterConfig()
     }
 
     /** Replies the person has not seen, for the red number on the bubble. */
@@ -380,6 +572,8 @@ internal object LiveChat {
 
     /** The owner may have switched the chat on or off while the app was away, and a reply may have come in. */
     private fun cameToFront() {
+        // The language or the person may have changed while the app was away (4.17.0).
+        syncPush()
         if (!wantsBubble || env == null) return
         scope.launch {
             refreshConfig(force = false)
@@ -461,7 +655,10 @@ internal object LiveChat {
         override fun onText(socket: ChatWebSocket, text: String) = onMain {
             if (threadSocket !== socket) return@onMain
             when (ChatRules.parseThreadFrame(text)) {
-                ChatRules.ThreadFrame.TEAM_MESSAGE -> setUnread(unread + 1)
+                ChatRules.ThreadFrame.TEAM_MESSAGE -> {
+                    setUnread(unread + 1)
+                    noticeReply(text)
+                }
                 ChatRules.ThreadFrame.VISITOR_READ -> setUnread(0)
                 null -> {}
             }
@@ -492,6 +689,150 @@ internal object LiveChat {
         threadRetry = null
         threadTries = 0
         dropThreadSocket()
+    }
+
+    // ── Notifications (4.17.0) ─────────────────────────────────────────────
+
+    /**
+     * A reply came in on the thread's socket (the app is in front, the chat
+     * closed). The server pushes it to a phone it holds a token for; on any
+     * other phone the SDK shows the same notification itself.
+     */
+    private fun noticeReply(frame: String) {
+        val ctx = Affiliateo.chatContext() ?: return
+        if (!ChatRules.showsLocalNotice(pushRegistered, screenOpen, startedCount > 0)) return
+        val message = ChatRules.teamMessage(frame) ?: return
+        ChatNotices.post(
+            ctx,
+            tag = ChatRules.noticeTag(message.id),
+            title = ChatRules.noticeTitle(null, config?.appName, ChatNotices.appLabel(ctx)),
+            body = ChatRules.noticeBody(message.body, Locale.getDefault().toLanguageTag()),
+        )
+    }
+
+    /** The greeting as one notification, once per greeting on this phone (ChatRules.notifiesGreeting). */
+    private fun notifyGreeting() {
+        val e = env ?: return
+        val ctx = Affiliateo.chatContext() ?: return
+        val cfg = config ?: return
+        val id = cfg.bubble.greetingId
+        val text = ChatRules.greetingText(cfg, Locale.getDefault().toLanguageTag())
+        val key = ChatRules.greetingNotifiedKey(e.appId)
+        if (!ChatRules.notifiesGreeting(noticesAllowed, greetingPending, id, prefs(ctx).getString(key, null), text, screenOpen)) return
+        val shown = ChatNotices.post(
+            ctx,
+            tag = ChatRules.GREETING_TAG,
+            title = ChatRules.noticeTitle(null, cfg.appName, ChatNotices.appLabel(ctx)),
+            body = ChatRules.noticeBody(text, Locale.getDefault().toLanguageTag()),
+        )
+        // Kept only once it showed: a person who switched notifications off since gets it when they allow them again.
+        if (shown) prefs(ctx).edit().putString(key, id).apply()
+    }
+
+    /** One call to the server about this phone's token after the other, so a "forget" never overtakes the "register" before it. */
+    private fun pushQueue(block: suspend () -> Unit) {
+        val before = pushWork
+        pushWork = scope.launch {
+            before?.join()
+            block()
+        }
+    }
+
+    /**
+     * Brings the server in line with this phone: registered once per launch
+     * while the chat is on (again when the token, the app, the language or
+     * the person changes), forgotten after a sign-out or an opt-out it has
+     * not heard. Called whenever one of those may have changed; sends nothing
+     * when nothing did.
+     */
+    private fun syncPush() {
+        if (pushToken == null || env == null) return
+        pushQueue { pushNow() }
+    }
+
+    private suspend fun pushNow() {
+        val e = env ?: return
+        val ctx = Affiliateo.chatContext() ?: return
+        val token = pushToken ?: return
+        val store = prefs(ctx)
+        val epoch = pushEpoch
+        val wanted = config?.enabled == true && !store.getBoolean(ChatRules.pushHoldKey(e.appId), false)
+        val body = if (wanted) ChatRules.pushDeviceBody(e, token, ctx.packageName, Locale.getDefault().toLanguageTag()) else null
+        // Offline a moment ago: not again just yet.
+        val waiting = pushNoAnswerAt != 0L && System.currentTimeMillis() - pushNoAnswerAt < ChatRules.PUSH_RETRY_MS
+        if (body == null) {
+            pushRegistered = false
+            // Nothing may be registered now; a registration the server still has goes.
+            if (!store.getBoolean(ChatRules.pushForgetKey(e.appId), false) || forgetRefused || waiting) return
+            when (ChatPushApi.send(e.apiUrl, "DELETE", ChatRules.pushForgetBody(e.appId, token).toString())) {
+                // Forgotten, or there was nothing it could forget (a server without the route).
+                ChatRules.PushAnswer.OK, ChatRules.PushAnswer.REFUSED -> {
+                    pushNoAnswerAt = 0L
+                    if (epoch == pushEpoch) store.edit().remove(ChatRules.pushForgetKey(e.appId)).apply()
+                }
+                ChatRules.PushAnswer.BUSY -> forgetRefused = true
+                ChatRules.PushAnswer.NONE -> pushNoAnswerAt = System.currentTimeMillis()
+            }
+            return
+        }
+        val signature = ChatRules.pushDeviceSignature(body)
+        if (pushSent == signature) {
+            pushRegistered = true
+            return
+        }
+        // Until this launch's answer: registered if the server took this very registration before.
+        pushRegistered = store.getString(ChatRules.pushKey(e.appId), null) == signature
+        if (pushRefused == signature || waiting) return
+        val answer = ChatPushApi.send(e.apiUrl, "POST", body.toString())
+        // A sign-out or an opt-out since: the "forget" queued behind this takes it back.
+        if (epoch != pushEpoch) return
+        when (answer) {
+            ChatRules.PushAnswer.OK -> {
+                pushNoAnswerAt = 0L
+                pushSent = signature
+                pushRegistered = true
+                // Registered again, so nothing is left to forget.
+                store.edit().putString(ChatRules.pushKey(e.appId), signature).remove(ChatRules.pushForgetKey(e.appId)).apply()
+                log("push token registered")
+            }
+            ChatRules.PushAnswer.REFUSED -> {
+                pushNoAnswerAt = 0L
+                pushRefused = signature
+                pushRegistered = false
+                log("push token not taken by the server")
+            }
+            ChatRules.PushAnswer.BUSY -> {
+                pushRefused = signature
+                log("push token not sent (server busy), tried again next launch")
+            }
+            ChatRules.PushAnswer.NONE -> {
+                pushNoAnswerAt = System.currentTimeMillis()
+                log("push token not sent (network), tried again later")
+            }
+        }
+    }
+
+    /**
+     * The server is to forget this phone: after a sign-out ([hold]: until the
+     * next thread starts, so a reply to the last person's thread never shows
+     * to the next person) or an opt-out. Kept on the phone until the server
+     * has heard it.
+     */
+    private fun forgetPush(hold: Boolean) {
+        val e = env ?: return
+        val ctx = Affiliateo.chatContext() ?: return
+        val store = prefs(ctx)
+        pushEpoch++
+        val known = pushRegistered || pushSent != null || store.contains(ChatRules.pushKey(e.appId)) || pushWork?.isActive == true
+        pushRegistered = false
+        pushSent = null
+        pushRefused = null
+        store.edit().apply {
+            remove(ChatRules.pushKey(e.appId))
+            if (hold) putBoolean(ChatRules.pushHoldKey(e.appId), true)
+            if (known) putBoolean(ChatRules.pushForgetKey(e.appId), true)
+        }.apply()
+        syncPush()
     }
 
     // ── The app channel ───────────────────────────────────────────────────
@@ -568,6 +909,12 @@ internal object LiveChat {
 
     fun saveToken(context: Context, appId: String, token: String) {
         ChatTokenStore.of(context).save(appId, token)
+        // A thread of this person's own: the phone may get its pushes again after a sign-out (4.17.0).
+        val store = prefs(context)
+        if (store.getBoolean(ChatRules.pushHoldKey(appId), false)) {
+            store.edit().remove(ChatRules.pushHoldKey(appId)).apply()
+            onMain { syncPush() }
+        }
     }
 
     /** Where the person left the bubble, in dp from the right and bottom: the React Native bubble's {"x":..,"y":..}. */
@@ -605,7 +952,17 @@ internal object LiveChat {
         layer.isClickable = false
         layer.isFocusable = false
         layer.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
-            override fun onViewAttachedToWindow(v: View) = onMain { placeBubble() }
+            // Posted, never run right here (4.17.0): Android is in the middle of
+            // attaching the screen's views, and placing the bubble can take one
+            // off the screen's content (a bubble put there before this layer
+            // came). Taking a view out under Android's feet crashed the app
+            // (a NullPointerException in ViewGroup.dispatchAttachedToWindow)
+            // when a screen was made again while the bubble showed, as after
+            // a change of the app's language.
+            override fun onViewAttachedToWindow(v: View) {
+                main.post { placeBubble() }
+            }
+
             override fun onViewDetachedFromWindow(v: View) {}
         })
     }
@@ -658,6 +1015,7 @@ internal object LiveChat {
         ) {
             existing?.let { container.removeView(it) }
             stopLive()
+            syncWiggle(false)
             return
         }
         // A phone gets the owner's phone size ("auto" makes it smaller), a tablet the other.
@@ -680,7 +1038,54 @@ internal object LiveChat {
         bubble.bringToFront()
         paintBubble()
         startLive()
+        syncWiggle(true)
     }
+
+    // ── The wiggle (4.17.0) ────────────────────────────────────────────────
+
+    /**
+     * Starts, stops or re-times the wiggle's timer to match the bubble being
+     * on screen ([shown]), the app in front, the chat closed and the seconds
+     * asked for (the app's own code, else the dashboard's). A timer already
+     * running at the right pace is left alone, so the wait is never reset by
+     * a repaint.
+     */
+    private fun syncWiggle(shown: Boolean) {
+        val every = if (shown && startedCount > 0 && !screenOpen) ChatRules.wiggleEvery(wiggleCode, config?.bubble?.wiggleSeconds ?: 0) else 0
+        if (every == wiggleEvery) return
+        main.removeCallbacks(wiggleTick)
+        wiggleEvery = every
+        if (every > 0) main.postDelayed(wiggleTick, every * 1000L)
+    }
+
+    /** One wiggle when its wait is over (if the bubble may move right now), then the next wait. */
+    private val wiggleTick = object : Runnable {
+        override fun run() {
+            val every = wiggleEvery
+            if (every <= 0) return
+            val bubble = bubbleIn(resumed?.get())
+            if (bubble != null && ChatRules.wiggles(
+                    everySeconds = every,
+                    bubbleOnScreen = bubble.isShown && bubble.hasWindowFocus(),
+                    chatOpen = screenOpen,
+                    appInFront = startedCount > 0,
+                    touched = bubble.isTouched,
+                    animationsOn = animationsOn(bubble.context),
+                )
+            ) {
+                bubble.wiggle()
+            }
+            main.postDelayed(this, every * 1000L)
+        }
+    }
+
+    /** False while the phone has animations off: Remove animations in Accessibility, or the animator scale at 0. */
+    private fun animationsOn(context: Context): Boolean =
+        if (Build.VERSION.SDK_INT >= 26) {
+            ValueAnimator.areAnimatorsEnabled()
+        } else {
+            Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) != 0f
+        }
 
     // ── The chat screen ───────────────────────────────────────────────────
 
@@ -702,6 +1107,8 @@ internal object LiveChat {
         greetingPending = false
         screenOpen = true
         placeBubble()
+        // They are about to read it all: the notifications go (4.17.0).
+        ChatNotices.clear(activity.applicationContext)
         val intent = Intent(activity, ChatActivity::class.java)
             .putExtra(ChatActivity.EXTRA_URL, url)
             .putExtra(ChatActivity.EXTRA_API_URL, e.apiUrl)
@@ -730,13 +1137,19 @@ internal object LiveChat {
         unread = 0
         placeBubble()
     }
+
+    /** The chat screen is in front (again): whatever notification is still up, they are reading the chat now. */
+    fun chatSeen(activity: ChatActivity) {
+        ChatNotices.clear(activity.applicationContext)
+    }
 }
 
 /**
  * The floating chat bubble. It starts in the owner's corner; press, hold and
  * move to drag it, and it stays where it was left from then on. The view is
  * 4 dp bigger than the circle on each side so the red number and the green
- * dot fit inside it.
+ * dot fit inside it. A wiggle (4.17.0) turns and grows the whole view about
+ * its middle, so the circle, the red number and the green dot move as one piece.
  */
 @SuppressLint("ViewConstructor")
 internal class ChatBubbleView(
@@ -779,6 +1192,11 @@ internal class ChatBubbleView(
     private var startOffset = Pair(0f, 0f)
     private var dragging = false
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
+
+    /** A finger is on the bubble (a press or a drag): it does not wiggle under it. */
+    var isTouched = false
+        private set
+    private var wiggling: ValueAnimator? = null
 
     init {
         layoutParams = LayoutParams(boxPx, boxPx, Gravity.BOTTOM or Gravity.END)
@@ -872,6 +1290,46 @@ internal class ChatBubbleView(
         post { place() }
     }
 
+    override fun onDetachedFromWindow() {
+        stopWiggle()
+        super.onDetachedFromWindow()
+    }
+
+    /**
+     * One wiggle (4.17.0): three smooth swings left and right that die down,
+     * the bubble a touch bigger in the middle, then level and its own size
+     * again. Its turn and size are read from ChatRules on every frame (one
+     * animator from 0 to 1, at an even pace), so it never jumps. LiveChat
+     * decides when; a finger on the bubble, or the bubble leaving the screen,
+     * cuts it cleanly.
+     */
+    fun wiggle() {
+        if (isTouched || wiggling?.isRunning == true) return
+        wiggling = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = ChatRules.WIGGLE_MS
+            interpolator = LinearInterpolator()
+            addUpdateListener { pose(it.animatedFraction) }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) = pose(0f)
+            })
+            start()
+        }
+    }
+
+    /** The bubble as it stands at this point of a wiggle (0: level, its own size). */
+    private fun pose(fraction: Float) {
+        rotation = ChatRules.wiggleDegrees(fraction)
+        val size = ChatRules.wiggleScale(fraction)
+        scaleX = size
+        scaleY = size
+    }
+
+    private fun stopWiggle() {
+        wiggling?.cancel()
+        wiggling = null
+        pose(0f)
+    }
+
     fun requestPlace() = post { place() }
 
     /** In the owner's corner, or where the person left it. */
@@ -963,6 +1421,8 @@ internal class ChatBubbleView(
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                isTouched = true
+                stopWiggle()
                 downX = event.rawX
                 downY = event.rawY
                 startOffset = dragged ?: currentOffset()
@@ -980,6 +1440,7 @@ internal class ChatBubbleView(
                 return true
             }
             MotionEvent.ACTION_UP -> {
+                isTouched = false
                 if (dragging) {
                     dragged?.let { LiveChat.saveOffset(context, appId, it.first, it.second) }
                 } else {
@@ -987,7 +1448,10 @@ internal class ChatBubbleView(
                 }
                 return true
             }
-            MotionEvent.ACTION_CANCEL -> return true
+            MotionEvent.ACTION_CANCEL -> {
+                isTouched = false
+                return true
+            }
         }
         return super.onTouchEvent(event)
     }

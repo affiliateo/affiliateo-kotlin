@@ -294,6 +294,12 @@ class ChatActivity : Activity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // In front (again): a reply's notification still up is being read here (4.17.0).
+        LiveChat.chatSeen(this)
+    }
+
     override fun onPause() {
         super.onPause()
         // Early, so the screen underneath gets its bubble back as it comes up.

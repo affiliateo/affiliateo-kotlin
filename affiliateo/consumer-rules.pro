@@ -46,3 +46,9 @@
 -keepclassmembers class com.affiliateo.sdk.ChatActivity$Bridge {
     @android.webkit.JavascriptInterface <methods>;
 }
+
+# Live Chat's notifications (4.17.0, ChatNotifications.kt) need no rule: they
+# are drawn with Android's own classes, the app's icon is read from the
+# manifest's meta-data by name, and nothing is looked up by class name. The
+# SDK has no Firebase in it (the app hands it the token and each push), so
+# there is nothing of Firebase's to keep or to quiet here either.
