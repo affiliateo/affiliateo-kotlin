@@ -951,6 +951,57 @@ object Affiliateo {
     }
 
     /**
+     * Put an affiliate's code on this device (4.18.0): a coupon code without
+     * the coupon. The buyer types the code in a box your app shows, you pass it
+     * here, and that affiliate gets the sale. No discount, Google Play is not
+     * involved, and nothing is matched by IP address for this buyer.
+     *
+     * The code is the one each affiliate already has, the end of their link. A
+     * typed code beats a link match and is never overwritten by one; a later
+     * code replaces an earlier one, so a typo can be fixed before buying. Turn
+     * on "Affiliate codes" for the app in Affiliateo first.
+     *
+     * ```kotlin
+     * lifecycleScope.launch {
+     *     val result = Affiliateo.setAffiliateCode(codeField.text.toString())
+     *     codeLabel.text = if (result.matched) "Code applied" else "Code not found"
+     * }
+     * ```
+     *
+     * Never throws (a cancelled caller is cancelled as usual). Waits up to 10
+     * seconds for this launch's first identify, since the code goes on the
+     * device identify registered. Then buy as you already do, with
+     * `state.obfuscatedAccountId`. Apps on RevenueCat need nothing more: the
+     * `affiliateo_ref` attribute is refreshed here. Before [configure] it
+     * answers NOT_READY.
+     */
+    @JvmStatic
+    suspend fun setAffiliateCode(code: String): AffiliateCode {
+        val typed = AffiliateCodeRules.normalize(code)
+            ?: return AffiliateCode.refused(AffiliateCode.Reason.INVALID).also { log("setAffiliateCode: not a code") }
+        withTimeoutOrNull(10_000L) { launchJob?.join() }
+        // Nothing is sent for a person who opted out, and without a visitor
+        // there is no device on the server to put the code on.
+        val client = client
+        val did = deviceId
+        val cid = campaignId
+        val visitorId = state.visitorId
+        if (optedOut || client == null || did == null || cid == null || visitorId == null) {
+            log("setAffiliateCode: not ready (no identify yet, or opted out)")
+            return AffiliateCode.refused(AffiliateCode.Reason.NOT_READY)
+        }
+        val answer = client.affiliateCode(cid, did, typed)
+        val refCode = answer.refCode
+        if (answer.matched && refCode != null) {
+            state = state.copy(refCode = refCode, isMatched = true, isLoading = false)
+            // RevenueCat reads the affiliate off this attribute at the sale.
+            setRevenueCatAttributes(visitorId, refCode)
+        }
+        log("setAffiliateCode", "matched=${answer.matched}, ref=${answer.refCode}, reason=${answer.reason}")
+        return answer
+    }
+
+    /**
      * POST /api/v1/mobile/identify-user for the signed-in user. A 400 is not
      * retried (and the stored id is forgotten); a network or server error
      * leaves it stored for the next launch; NotLinked is sent once more when

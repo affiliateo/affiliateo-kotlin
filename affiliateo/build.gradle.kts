@@ -10,6 +10,14 @@ plugins {
     id("maven-publish")
 }
 
+// 4.18.0: affiliate codes. Affiliateo.setAffiliateCode(code) puts an
+//         affiliate's code on this device: a coupon code without the coupon.
+//         The buyer types the code in a box the app shows and that affiliate
+//         gets the sale, with no discount, no store involved and no match by
+//         IP address (POST /api/v1/mobile/affiliate-code: campaign_id,
+//         device_id, code). It answers matched + refCode, or a reason
+//         (NOT_FOUND, INVALID, OFF, NOT_READY, FAILED), and never throws. On
+//         RevenueCat apps the affiliateo_ref attribute is refreshed with it.
 // 4.17.0: Live Chat replies as notifications, and a bubble that wiggles.
 //         A reply from the team shows as a notification (the Live Chat app's
 //         name, then the message; channel "Support messages", named in the
@@ -184,7 +192,7 @@ plugins {
 // install (Meta / TikTok / Google Ads) gets its source labelled server-side
 // with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-version = "4.17.0"
+version = "4.18.0"
 
 android {
     namespace = "com.affiliateo.sdk"

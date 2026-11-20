@@ -218,6 +218,42 @@ internal class AffiliateoClient(private val apiUrl: String = "https://affiliateo
     }
 
     /**
+     * A code the buyer typed in the app (4.18.0). POST
+     * /api/v1/mobile/affiliate-code. Never throws but for a cancelled caller:
+     * offline, or a reply that is not one, is an answer too (FAILED), so the
+     * app can say "try again" instead of catching.
+     */
+    suspend fun affiliateCode(campaignId: String, deviceId: String, code: String): AffiliateCode = withContext(Dispatchers.IO) {
+        try {
+            val url = URL("${apiUrl.trimEnd('/')}/api/v1/mobile/affiliate-code")
+            val conn = url.openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.doOutput = true
+            // The buyer is waiting beside a text field, and HttpURLConnection
+            // waits forever by default.
+            conn.connectTimeout = 10_000
+            conn.readTimeout = 10_000
+
+            val body = JSONObject().apply {
+                put("campaign_id", campaignId)
+                put("device_id", deviceId)
+                put("code", code)
+            }
+            conn.outputStream.use { it.write(body.toString().toByteArray()) }
+
+            val status = conn.responseCode
+            // A refusal carries its reason in the body, on the error stream.
+            val stream = if (status in 200..299) conn.inputStream else conn.errorStream
+            AffiliateCodeRules.parseReply(status, stream?.bufferedReader()?.use { it.readText() })
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            AffiliateCode.refused(AffiliateCode.Reason.FAILED)
+        }
+    }
+
+    /**
      * Which products this phone should price today (4.13.0). POST
      * /api/v1/mobile/store-prices with no prices: the app's store product
      * ids, and whether a report is due (the server takes one a day).

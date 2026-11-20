@@ -18,7 +18,7 @@ In your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.github.affiliateo:affiliateo-kotlin:4.17.0")
+    implementation("com.github.affiliateo:affiliateo-kotlin:4.18.0")
 }
 ```
 
@@ -142,6 +142,34 @@ billingClient.launchBillingFlow(activity, params)
 ```
 
 It is null only until the SDK's first identify succeeds. Signing out keeps it.
+
+## Affiliate codes (4.18.0)
+
+A coupon code without the coupon. The buyer types an affiliate's code in a box your app shows, and that affiliate gets the sale. There is no discount, Google Play is not involved, and nothing is matched by IP address for that buyer.
+
+The code is the one each affiliate already has: the end of their link. Turn on **Affiliate codes** for the app in Affiliateo once your app has the box.
+
+```kotlin
+lifecycleScope.launch {
+    val result = Affiliateo.setAffiliateCode(codeField.text.toString())
+
+    if (result.matched) {
+        // Say "Code applied". result.refCode is the affiliate's code.
+    } else {
+        // Say "Code not found". result.reason says why:
+        // NOT_FOUND, INVALID, OFF, NOT_READY or FAILED.
+    }
+}
+
+// Then buy as you already do, with Affiliateo.state.obfuscatedAccountId.
+```
+
+- A typed code beats a link match and is never overwritten by one.
+- A later code replaces an earlier one, so a typo can be fixed before buying.
+- It never throws, and it waits up to 10 seconds for this launch's first identify.
+- Apps on RevenueCat need nothing more: the `affiliateo_ref` attribute is refreshed with it.
+
+To credit by code only, turn off **Match installs to link clicks** for the app in Affiliateo. Then no install is matched to a link click by IP address.
 
 ## Report purchases to your ad networks
 
