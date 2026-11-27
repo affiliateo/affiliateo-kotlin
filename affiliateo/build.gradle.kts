@@ -10,6 +10,21 @@ plugins {
     id("maven-publish")
 }
 
+// 4.19.0: hold to hide the Live Chat bubble. A finger kept still on the
+//         bubble for 1 s (Android's touch slop) starts hide mode, with one
+//         haptic tick: the bubble jiggles 2.5 degrees each way (130 ms a
+//         swing, not with animations off) and a red X shows at its top-left,
+//         where the green dot goes meanwhile. A tap on the X hides the bubble
+//         and keeps that on the phone (affiliateo_chat_hidden_<appId> in the
+//         "affiliateo" SharedPreferences, beside the bubble's place):
+//         showChatBubble() shows nothing from then on. Any other touch, on
+//         the bubble or elsewhere on the screen (which still reaches the
+//         app), 5 s without one, or the bubble leaving the screen ends hide
+//         mode. TalkBack: a "Hide chat bubble" action on the bubble (16
+//         languages). New: restoreChatBubble(), isChatBubbleHiddenByUser,
+//         onChatBubbleHidden(action). hideChatBubble() and logout() never
+//         touch the hide. The bubble lays itself out left to right in every
+//         language, so the X and the red number keep their corners.
 // 4.18.0: affiliate codes. Affiliateo.setAffiliateCode(code) puts an
 //         affiliate's code on this device: a coupon code without the coupon.
 //         The buyer types the code in a box the app shows and that affiliate
@@ -192,7 +207,7 @@ plugins {
 // install (Meta / TikTok / Google Ads) gets its source labelled server-side
 // with zero merchant work. Additive, no API changes.
 // 3.0.0: event queue + reset/optOut/optIn/flush + Compose helper.
-version = "4.18.0"
+version = "4.19.0"
 
 android {
     namespace = "com.affiliateo.sdk"

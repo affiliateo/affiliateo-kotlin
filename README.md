@@ -18,7 +18,7 @@ In your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.github.affiliateo:affiliateo-kotlin:4.18.0")
+    implementation("com.github.affiliateo:affiliateo-kotlin:4.19.0")
 }
 ```
 
@@ -297,7 +297,8 @@ Affiliateo.setChatBubbleWiggle(seconds = 45)
   }
   ```
 
-  People can drag it and it stays where they leave it. TalkBack reads it in
+  People can drag it and it stays where they leave it, and hold it to hide it
+  (4.19.0, below). TalkBack reads it in
   the phone's language, with the unread count. It shows a red number for replies they have not read (live
   while the app is open), and a green dot while someone on your team is
   online. Switching the chat off in your dashboard, or someone on your team
@@ -329,6 +330,34 @@ Affiliateo.setChatBubbleWiggle(seconds = 45)
   while the phone has animations off (Remove animations).
 - Google Play Data safety: chat messages are **Messages, Other in-app
   messages**.
+
+### Hold to hide (4.19.0)
+
+The person can hide the bubble themselves. They hold it still for a second
+and it jiggles, with a red X at its top-left; a tap on the X hides it. Any
+other tap, or 5 seconds without one, leaves it as it was. TalkBack has a
+"Hide chat bubble" action on the bubble that hides it at once.
+
+The hide is kept on the phone, like the bubble's place: from then on
+`showChatBubble()` shows nothing there, until your app calls
+`restoreChatBubble()`. `openChat()` still works, for your own "Contact
+support" button. Three calls:
+
+```kotlin
+// Runs once, on the main thread, after the person hid the bubble
+Affiliateo.onChatBubbleHidden {
+    settings.chatBubble = false   // your own switch goes off
+    Toast.makeText(context, "Chat bubble hidden. Turn it back on in Settings.", Toast.LENGTH_LONG).show()
+}
+
+// Your Settings switch: on brings the bubble back
+if (on) Affiliateo.restoreChatBubble() else Affiliateo.hideChatBubble()
+
+// Whether the person hid it on this phone (false before configure)
+val hidden = Affiliateo.isChatBubbleHiddenByUser
+```
+
+`hideChatBubble()` and `logout()` never change the person's hide.
 
 ### Replies as notifications (4.17.0)
 

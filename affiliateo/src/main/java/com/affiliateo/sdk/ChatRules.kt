@@ -600,27 +600,29 @@ internal object ChatRules {
         val supportMessages: String,
         /** A notification's line for a message with no words (4.17.0). */
         val sentMessage: String,
+        /** The red X of hide mode and TalkBack's action on the bubble (4.19.0). */
+        val hide: String,
     ) {
         fun unread(count: Int): String = unreadPattern.replace("{n}", count.toString())
     }
 
     val CHAT_WORDS: Map<String, ChatWords> = mapOf(
-        "en" to ChatWords("Chat", "Close chat", "Chat, {n} unread", "Support messages", "Sent you a message"),
-        "ar" to ChatWords("الدردشة", "إغلاق الدردشة", "الدردشة، {n} غير مقروءة", "رسائل الدعم", "أرسل لك رسالة"),
-        "de" to ChatWords("Chat", "Chat schließen", "Chat, {n} ungelesen", "Support-Nachrichten", "Hat dir eine Nachricht gesendet"),
-        "es" to ChatWords("Chat", "Cerrar chat", "Chat, {n} sin leer", "Mensajes de ayuda", "Te envió un mensaje"),
-        "fr" to ChatWords("Chat", "Fermer le chat", "Chat, {n} non lus", "Messages d'aide", "Vous a envoyé un message"),
-        "hi" to ChatWords("चैट", "चैट बंद करें", "चैट, {n} अपठित", "सहायता संदेश", "आपको एक संदेश भेजा"),
-        "it" to ChatWords("Chat", "Chiudi chat", "Chat, {n} non letti", "Messaggi di assistenza", "Ti ha inviato un messaggio"),
-        "ja" to ChatWords("チャット", "チャットを閉じる", "チャット、未読 {n} 件", "サポートからのメッセージ", "メッセージが届きました"),
-        "ko" to ChatWords("채팅", "채팅 닫기", "채팅, 읽지 않음 {n}개", "고객 지원 메시지", "메시지를 보냈습니다"),
-        "nl" to ChatWords("Chat", "Chat sluiten", "Chat, {n} ongelezen", "Hulpberichten", "Heeft je een bericht gestuurd"),
-        "pl" to ChatWords("Czat", "Zamknij czat", "Czat, nieprzeczytane: {n}", "Wiadomości od pomocy", "Masz nową wiadomość"),
-        "pt" to ChatWords("Chat", "Fechar chat", "Chat, {n} não lidas", "Mensagens de ajuda", "Enviou uma mensagem para você"),
-        "ru" to ChatWords("Чат", "Закрыть чат", "Чат, непрочитанных: {n}", "Сообщения поддержки", "Вам пришло сообщение"),
-        "tr" to ChatWords("Sohbet", "Sohbeti kapat", "Sohbet, {n} okunmamış", "Destek mesajları", "Size bir mesaj gönderdi"),
-        "vi" to ChatWords("Trò chuyện", "Đóng trò chuyện", "Trò chuyện, {n} chưa đọc", "Tin nhắn hỗ trợ", "Đã gửi cho bạn một tin nhắn"),
-        "zh" to ChatWords("聊天", "关闭聊天", "聊天，{n} 条未读", "客服消息", "给你发了一条消息"),
+        "en" to ChatWords("Chat", "Close chat", "Chat, {n} unread", "Support messages", "Sent you a message", "Hide chat bubble"),
+        "ar" to ChatWords("الدردشة", "إغلاق الدردشة", "الدردشة، {n} غير مقروءة", "رسائل الدعم", "أرسل لك رسالة", "إخفاء فقاعة الدردشة"),
+        "de" to ChatWords("Chat", "Chat schließen", "Chat, {n} ungelesen", "Support-Nachrichten", "Hat dir eine Nachricht gesendet", "Chat-Blase ausblenden"),
+        "es" to ChatWords("Chat", "Cerrar chat", "Chat, {n} sin leer", "Mensajes de ayuda", "Te envió un mensaje", "Ocultar burbuja de chat"),
+        "fr" to ChatWords("Chat", "Fermer le chat", "Chat, {n} non lus", "Messages d'aide", "Vous a envoyé un message", "Masquer la bulle de chat"),
+        "hi" to ChatWords("चैट", "चैट बंद करें", "चैट, {n} अपठित", "सहायता संदेश", "आपको एक संदेश भेजा", "चैट बबल छिपाएँ"),
+        "it" to ChatWords("Chat", "Chiudi chat", "Chat, {n} non letti", "Messaggi di assistenza", "Ti ha inviato un messaggio", "Nascondi la bolla della chat"),
+        "ja" to ChatWords("チャット", "チャットを閉じる", "チャット、未読 {n} 件", "サポートからのメッセージ", "メッセージが届きました", "チャットバブルを非表示"),
+        "ko" to ChatWords("채팅", "채팅 닫기", "채팅, 읽지 않음 {n}개", "고객 지원 메시지", "메시지를 보냈습니다", "채팅 버블 숨기기"),
+        "nl" to ChatWords("Chat", "Chat sluiten", "Chat, {n} ongelezen", "Hulpberichten", "Heeft je een bericht gestuurd", "Chatbubbel verbergen"),
+        "pl" to ChatWords("Czat", "Zamknij czat", "Czat, nieprzeczytane: {n}", "Wiadomości od pomocy", "Masz nową wiadomość", "Ukryj dymek czatu"),
+        "pt" to ChatWords("Chat", "Fechar chat", "Chat, {n} não lidas", "Mensagens de ajuda", "Enviou uma mensagem para você", "Ocultar balão do chat"),
+        "ru" to ChatWords("Чат", "Закрыть чат", "Чат, непрочитанных: {n}", "Сообщения поддержки", "Вам пришло сообщение", "Скрыть значок чата"),
+        "tr" to ChatWords("Sohbet", "Sohbeti kapat", "Sohbet, {n} okunmamış", "Destek mesajları", "Size bir mesaj gönderdi", "Sohbet balonunu gizle"),
+        "vi" to ChatWords("Trò chuyện", "Đóng trò chuyện", "Trò chuyện, {n} chưa đọc", "Tin nhắn hỗ trợ", "Đã gửi cho bạn một tin nhắn", "Ẩn bong bóng trò chuyện"),
+        "zh" to ChatWords("聊天", "关闭聊天", "聊天，{n} 条未读", "客服消息", "给你发了一条消息", "隐藏聊天气泡"),
     )
 
     /** The words for a language tag ("pt-BR", "zh-Hans-CN"): its first two letters. */
@@ -708,10 +710,11 @@ internal object ChatRules {
      * Whether the bubble wiggles now that its wait is over: only while it is
      * on screen in the window the person is looking at, the chat is closed,
      * the app is in front and no finger is on it, and never while the phone
-     * has animations off (Remove animations, or the animator scale at 0).
+     * has animations off (Remove animations, or the animator scale at 0), nor
+     * in hide mode (4.19.0), where the bubble jiggles instead.
      */
-    fun wiggles(everySeconds: Int, bubbleOnScreen: Boolean, chatOpen: Boolean, appInFront: Boolean, touched: Boolean, animationsOn: Boolean): Boolean =
-        everySeconds > 0 && bubbleOnScreen && !chatOpen && appInFront && !touched && animationsOn
+    fun wiggles(everySeconds: Int, bubbleOnScreen: Boolean, chatOpen: Boolean, appInFront: Boolean, touched: Boolean, animationsOn: Boolean, hideMode: Boolean = false): Boolean =
+        everySeconds > 0 && bubbleOnScreen && !chatOpen && appInFront && !touched && animationsOn && !hideMode
 
     /**
      * How far the bubble is turned, in degrees, at [fraction] (0 to 1) of one
@@ -734,6 +737,88 @@ internal object ChatRules {
         val p = fraction.coerceIn(0f, 1f).toDouble()
         if (p == 0.0 || p == 1.0) return 1f
         return (1 + WIGGLE_GROW * Math.sin(Math.PI * p)).toFloat()
+    }
+
+    // ── Hold to hide (4.19.0) ─────────────────────────────────────────────
+    //
+    // The same numbers in every SDK that draws the bubble (KEEP IN STEP): a
+    // finger kept still on the bubble for HOLD_MS starts hide mode, where the
+    // bubble jiggles like the Affiliateo app's revenue cards in edit mode and
+    // a red X shows at its top-left. A tap on the X hides the bubble on this
+    // phone until the app calls restoreChatBubble(); any other touch, or
+    // HIDE_MODE_MS without one, ends hide mode.
+
+    /** How long a finger stays still on the bubble before hide mode starts, in milliseconds. */
+    const val HOLD_MS = 1000L
+    /** How long hide mode lasts without a tap on the X, in milliseconds. */
+    const val HIDE_MODE_MS = 5000L
+    /** How far the bubble rocks each way in hide mode, in degrees (the cards rock 0.55; a small round bubble needs more to show). */
+    const val JIGGLE_DEGREES = 2.5f
+    /** How long one swing of the jiggle takes, in milliseconds, back and forth, easing in and out. */
+    const val JIGGLE_SWING_MS = 130L
+    /** The red X: a rounded square this many dp on a side. */
+    const val HIDE_X_DP = 18f
+    /** The red X's corner radius, in dp. */
+    const val HIDE_X_RADIUS_DP = 6f
+    /** How far the red X's top-left corner sits out from the circle's top-left corner, in dp, so it hangs over the circle's edge. */
+    const val HIDE_X_OUTSET_DP = 3f
+    /** The red X's touch target, in dp on a side, as far as the bubble's box reaches. */
+    const val HIDE_X_TARGET_DP = 36f
+    /** Each stroke of the white cross inside the X, in dp: its length and its width. */
+    const val HIDE_X_CROSS_DP = 8f
+    const val HIDE_X_STROKE_DP = 2f
+
+    /** Kept while the person has hidden the bubble on this phone, next to the bubble's place. */
+    fun hiddenKey(appId: String) = "affiliateo_chat_hidden_$appId"
+
+    /**
+     * Whether the person hid the bubble on this phone ([stored]: the saved
+     * flag): what isChatBubbleHiddenByUser answers, and what makes
+     * showChatBubble() show nothing. Never before the app id is known (before
+     * configure()): a showChatBubble() made then waits for configure() as
+     * before, and asks again there.
+     */
+    fun hiddenByUser(appId: String?, stored: Boolean): Boolean = !appId.isNullOrEmpty() && stored
+
+    /**
+     * Whether a finger that moved [dx], [dy] px since it went down is still
+     * "still" for a touch slop of [slop] px: still, it may become a tap or a
+     * hold; past the slop it is a drag, and the hold is off.
+     */
+    fun isStill(dx: Float, dy: Float, slop: Int): Boolean = Math.abs(dx) + Math.abs(dy) < slop
+
+    /** What lifting the finger off the bubble does. */
+    enum class Release {
+        /** A tap: the chat opens. */
+        OPEN_CHAT,
+
+        /** The end of a drag: the bubble's new place is kept. */
+        KEEP_PLACE,
+
+        /** Nothing: the hold started hide mode, or the touch was used to end it. */
+        NOTHING,
+    }
+
+    /** What lifting the finger does, for a touch that started hide mode or ended it ([used]) and one that was dragged ([dragged]). */
+    fun release(used: Boolean, dragged: Boolean): Release = when {
+        used -> Release.NOTHING
+        dragged -> Release.KEEP_PLACE
+        else -> Release.OPEN_CHAT
+    }
+
+    /** Where the red X's top-left corner sits, in dp from the bubble box's top-left, for a circle set [padDp] in from the box's edges. */
+    fun hideXOrigin(padDp: Float): Float = padDp - HIDE_X_OUTSET_DP
+
+    /**
+     * Whether a touch at [x], [y] (dp from the bubble box's top-left corner,
+     * the circle set [padDp] in from its edges) lands on the red X: its
+     * [HIDE_X_TARGET_DP] target around the X's middle. The box takes no
+     * touches outside itself, so the target stops at the box's edges.
+     */
+    fun onHideX(x: Float, y: Float, padDp: Float): Boolean {
+        val middle = hideXOrigin(padDp) + HIDE_X_DP / 2
+        val half = HIDE_X_TARGET_DP / 2
+        return Math.abs(x - middle) <= half && Math.abs(y - middle) <= half
     }
 
     // ── Notifications (4.17.0) ────────────────────────────────────────────

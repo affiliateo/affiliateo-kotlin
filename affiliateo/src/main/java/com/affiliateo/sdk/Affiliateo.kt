@@ -511,11 +511,58 @@ object Affiliateo {
      *
      * Nothing shows until the app calls this or [openChat], so the store
      * reviewer sees every feature the app has. Safe from any thread.
+     *
+     * The person can hide the bubble themselves (4.19.0): they hold it still
+     * for a second and tap the red X. From then on this shows nothing on
+     * their phone, until [restoreChatBubble]. See [onChatBubbleHidden].
      */
     fun showChatBubble() = LiveChat.showBubble()
 
-    /** Take the chat bubble away again (4.14.0). */
+    /**
+     * Take the chat bubble away again (4.14.0). It never changes whether the
+     * person hid the bubble themselves ([isChatBubbleHiddenByUser]).
+     */
     fun hideChatBubble() = LiveChat.hideBubble()
+
+    /**
+     * Bring back the chat bubble the person hid (4.19.0): forgets their hide
+     * on this phone, then does what [showChatBubble] does. Call it when your
+     * app's own "Chat bubble" switch is turned back on.
+     *
+     * ```kotlin
+     * // Your Settings switch
+     * if (on) Affiliateo.restoreChatBubble() else Affiliateo.hideChatBubble()
+     * ```
+     *
+     * Safe from any thread, and before [configure] (the hide is forgotten
+     * there).
+     */
+    fun restoreChatBubble() = LiveChat.restore()
+
+    /**
+     * Whether the person hid the chat bubble on this phone (4.19.0): they held
+     * it still for a second and tapped its red X. While true, [showChatBubble]
+     * shows nothing; [openChat] and [chatAvailable] work as before, for your
+     * own "Contact support" button. Kept on the phone, like the bubble's place:
+     * [logout] keeps it, [restoreChatBubble] forgets it. False before
+     * [configure]. Safe from any thread.
+     */
+    val isChatBubbleHiddenByUser: Boolean get() = LiveChat.hiddenByUser()
+
+    /**
+     * Hear when the person hides the chat bubble (4.19.0): they held it still
+     * for a second and tapped its red X (or used TalkBack's "Hide chat bubble"
+     * action). [action] runs once per hide, on the main thread, after the
+     * bubble has gone. Null takes it away; a new one replaces the last.
+     *
+     * ```kotlin
+     * Affiliateo.onChatBubbleHidden {
+     *     settings.chatBubble = false   // your app's own switch goes off
+     *     Toast.makeText(context, "Chat bubble hidden. Turn it back on in Settings.", Toast.LENGTH_LONG).show()
+     * }
+     * ```
+     */
+    fun onChatBubbleHidden(action: (() -> Unit)?) = LiveChat.setOnHidden(action)
 
     /**
      * A layer for your pages that the chat bubble lives in (4.15.2), for an app

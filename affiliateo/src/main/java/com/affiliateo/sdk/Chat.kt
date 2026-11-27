@@ -2,11 +2,13 @@ package com.affiliateo.sdk
 
 import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
+import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.Application
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Color
@@ -21,12 +23,16 @@ import android.provider.Settings
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
+import android.view.Window
 import android.view.WindowInsets
+import android.view.accessibility.AccessibilityNodeInfo
+import android.view.animation.AccelerateDecelerateInterpolator
 import android.view.animation.LinearInterpolator
 import android.widget.Button
 import android.widget.FrameLayout
@@ -88,6 +94,14 @@ import java.util.Locale
  * says notifications are allowed (notificationsAllowed). A tap opens the app
  * with the chat on top (handleIntent). And the bubble wiggles every so often
  * when the owner (or the app's code) asks for it.
+ *
+ * Since 4.19.0 the person can hide the bubble themselves: a finger kept still
+ * on it for a second starts hide mode (ChatBubbleView), and a tap on its red
+ * X hides it. That is kept on the phone (ChatRules.hiddenKey, beside the
+ * bubble's place), so showBubble() shows nothing from then on, until the app
+ * calls restore() (its own "Chat bubble" switch turned back on). The app's
+ * onChatBubbleHidden callback hears about it. hideBubble() and forget() never
+ * touch that.
  */
 internal object LiveChat {
     private const val LOG_TAG = "Affiliateo"
@@ -152,6 +166,12 @@ internal object LiveChat {
     /** Seconds between wiggles while the timer runs; 0 while it does not. */
     private var wiggleEvery = 0
 
+    // Hold to hide (4.19.0).
+    /** The app's callback for the person hiding the bubble (onChatBubbleHidden); set from any thread, run on the main one. */
+    @Volatile private var onHidden: (() -> Unit)? = null
+    /** restore() was called before configure(): the person's hide is forgotten there. */
+    private var restorePending = false
+
     // Notifications (4.17.0).
     /** The push token the app handed over this launch (setChatPushToken). */
     private var pushToken: String? = null
@@ -197,6 +217,7 @@ internal object LiveChat {
             }
 
             override fun onActivityStopped(activity: Activity) {
+                bubbleIn(activity)?.endHideMode()
                 startedCount--
                 if (startedCount == 0) {
                     stopLive()
@@ -214,11 +235,23 @@ internal object LiveChat {
                 }
             }
 
+            // Hide mode (4.19.0) ends as the screen goes, so nothing of it is left on the screen's window.
+            override fun onActivityPaused(activity: Activity) {
+                bubbleIn(activity)?.endHideMode()
+            }
+
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
-            override fun onActivityPaused(activity: Activity) {}
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
             override fun onActivityDestroyed(activity: Activity) {}
         })
+        // A restoreChatBubble() made before configure() (4.19.0): the person's
+        // hide is forgotten now, before the showChatBubble() below looks at it.
+        onMain {
+            if (restorePending) {
+                restorePending = false
+                forgetHidden()
+            }
+        }
         // A showChatBubble() made before configure().
         if (wantsBubble) showBubble()
         // And what else waited for configure() (4.17.0): a push token, "notifications
@@ -233,9 +266,19 @@ internal object LiveChat {
     // ── What the app calls ────────────────────────────────────────────────
 
     fun showBubble() = onMain {
-        wantsBubble = true
         // Placed once configure() runs (install).
-        val e = env ?: return@onMain
+        val e = env ?: run {
+            wantsBubble = true
+            return@onMain
+        }
+        // The person hid it on this phone (4.19.0): nothing shows until restore().
+        if (hiddenByUser()) {
+            wantsBubble = false
+            log("the person hid the chat bubble; restoreChatBubble() brings it back")
+            placeBubble()
+            return@onMain
+        }
+        wantsBubble = true
         // At once from the last answer this phone kept, then checked with the
         // server (turned off there, it goes away again).
         val ctx = Affiliateo.chatContext()
@@ -393,9 +436,53 @@ internal object LiveChat {
         }
     }
 
+    /** The app's own hideChatBubble(): the person's hide (4.19.0) is not touched. */
     fun hideBubble() = onMain {
         wantsBubble = false
         placeBubble()
+    }
+
+    // ── Hold to hide: what the app calls (4.19.0) ──────────────────────────
+
+    /** Forgets the person's hide on this phone, then shows the bubble as showBubble() does. Before configure(), the hide is forgotten there. */
+    fun restore() = onMain {
+        if (env == null) restorePending = true else forgetHidden()
+        showBubble()
+    }
+
+    /** The one callback for the person hiding the bubble (null: none). */
+    fun setOnHidden(action: (() -> Unit)?) {
+        onHidden = action
+    }
+
+    /** Whether the person hid the bubble on this phone; false before configure(). Safe from any thread. */
+    fun hiddenByUser(): Boolean {
+        val appId = env?.appId
+        val ctx = Affiliateo.chatContext() ?: return false
+        return ChatRules.hiddenByUser(appId, appId != null && prefs(ctx).getBoolean(ChatRules.hiddenKey(appId), false))
+    }
+
+    private fun forgetHidden() {
+        val e = env ?: return
+        val ctx = Affiliateo.chatContext() ?: return
+        prefs(ctx).edit().remove(ChatRules.hiddenKey(e.appId)).apply()
+    }
+
+    /**
+     * The person tapped the red X, or used TalkBack's action: kept on the
+     * phone, the bubble goes as hideBubble() takes it, then the app's
+     * callback runs once. Posted, never run in the middle of the bubble's own
+     * touch or accessibility call, since the bubble is taken off the screen.
+     */
+    fun hiddenByPerson() {
+        main.post {
+            val e = env ?: return@post
+            Affiliateo.chatContext()?.let { prefs(it).edit().putBoolean(ChatRules.hiddenKey(e.appId), true).apply() }
+            log("the person hid the chat bubble")
+            wantsBubble = false
+            placeBubble()
+            onHidden?.invoke()
+        }
     }
 
     fun open(activity: Activity) = onMain {
@@ -1026,7 +1113,11 @@ internal object LiveChat {
             container.removeView(existing)
             existing = null
         }
-        val bubble = existing ?: ChatBubbleView(activity, e.appId, size, style.position, glass, colors) { open(activity) }.also {
+        val bubble = existing ?: ChatBubbleView(
+            activity, e.appId, size, style.position, glass, colors,
+            onTap = { open(activity) },
+            onHide = { hiddenByPerson() },
+        ).also {
             it.tag = BUBBLE_TAG
             it.bottomPaddingDp = bottomPaddingDp
             container.addView(it)
@@ -1071,6 +1162,7 @@ internal object LiveChat {
                     appInFront = startedCount > 0,
                     touched = bubble.isTouched,
                     animationsOn = animationsOn(bubble.context),
+                    hideMode = bubble.inHideMode,
                 )
             ) {
                 bubble.wiggle()
@@ -1079,8 +1171,8 @@ internal object LiveChat {
         }
     }
 
-    /** False while the phone has animations off: Remove animations in Accessibility, or the animator scale at 0. */
-    private fun animationsOn(context: Context): Boolean =
+    /** False while the phone has animations off: Remove animations in Accessibility, or the animator scale at 0. The wiggle and hide mode's jiggle (4.19.0) both ask. */
+    fun animationsOn(context: Context): Boolean =
         if (Build.VERSION.SDK_INT >= 26) {
             ValueAnimator.areAnimatorsEnabled()
         } else {
@@ -1145,11 +1237,15 @@ internal object LiveChat {
 }
 
 /**
- * The floating chat bubble. It starts in the owner's corner; press, hold and
- * move to drag it, and it stays where it was left from then on. The view is
- * 4 dp bigger than the circle on each side so the red number and the green
- * dot fit inside it. A wiggle (4.17.0) turns and grows the whole view about
- * its middle, so the circle, the red number and the green dot move as one piece.
+ * The floating chat bubble. It starts in the owner's corner. A tap opens the
+ * chat; a finger that moves past the touch slop drags it, and it stays where
+ * it was left from then on. A finger kept still on it for ChatRules.HOLD_MS
+ * starts hide mode instead (4.19.0, enterHideMode): it jiggles and shows a
+ * red X that hides it. The view is 4 dp bigger than the circle on each side
+ * so the red number, the green dot and the red X fit inside it. A wiggle
+ * (4.17.0) turns and grows the whole view about its middle, so the circle,
+ * the red number and the green dot move as one piece; hide mode's jiggle
+ * turns it the same way.
  */
 @SuppressLint("ViewConstructor")
 internal class ChatBubbleView(
@@ -1164,6 +1260,8 @@ internal class ChatBubbleView(
     /** The owner's circle and icon colors (#rrggbb), as the config gave them. */
     val colors: Pair<String, String>,
     private val onTap: () -> Unit,
+    /** The person hid the bubble (4.19.0): the red X, or TalkBack's action. */
+    private val onHide: () -> Unit,
 ) : FrameLayout(context) {
     /** Dp the app keeps free above the bottom bars: the bubble starts above them and is never dragged into them. */
     var bottomPaddingDp = 0
@@ -1171,7 +1269,9 @@ internal class ChatBubbleView(
     private fun dp(value: Float) = (value * density).toInt()
 
     private val circlePx = dp(sizeDp.toFloat())
-    private val padPx = dp(4f)
+    /** How far the circle sits in from the box's edges. */
+    private val padDp = 4f
+    private val padPx = dp(padDp)
     /** The red number and the green dot, scaled with the circle. */
     private val badge = ChatRules.badgeMetrics(sizeDp)
     private val boxPx = circlePx + 2 * padPx
@@ -1198,8 +1298,33 @@ internal class ChatBubbleView(
         private set
     private var wiggling: ValueAnimator? = null
 
+    // Hold to hide (4.19.0).
+    /** Someone on the team is online: the green dot shows, unless the red number or the red X does. */
+    private var online = false
+    /** Hide mode: the bubble jiggles and the red X shows. */
+    var inHideMode = false
+        private set
+    /** This touch started hide mode, or was used to end it: lifting it does nothing, moving it does not drag. */
+    private var touchUsed = false
+    /** This touch went down on the red X in hide mode. */
+    private var downOnX = false
+    /** The person hid the bubble: once per bubble, so the app's callback runs once. */
+    private var hidden = false
+    private var jiggle: ObjectAnimator? = null
+    /** The screen's window, watched while hide mode lasts, so a touch anywhere else ends it. */
+    private var watch: HideModeWatch? = null
+    /** The bubble got this touch's first finger; the window's watch asks right after passing it on. */
+    var gotDown = false
+    private val hold = Runnable { holdDone() }
+    private val hideModeOver = Runnable { endHideMode() }
+    private val hideX: HideXView
+
     init {
         layoutParams = LayoutParams(boxPx, boxPx, Gravity.BOTTOM or Gravity.END)
+        // Laid out left to right in every language (4.19.0): the red X stays at
+        // the top-left and the red number at the top-right, as on the other
+        // platforms, and the circle stays inside its own shadow.
+        layoutDirection = LAYOUT_DIRECTION_LTR
         clipChildren = false
         clipToPadding = false
         isClickable = true
@@ -1266,22 +1391,37 @@ internal class ChatBubbleView(
                 topMargin = padPx - dp(badge.dotOffset)
             },
         )
+
+        // Hide mode's red X (4.19.0), over the circle's top-left edge, with the red number's white edge.
+        hideX = HideXView(context, dp(badge.border).coerceAtLeast(1), words.hide) { hideNow() }
+        addView(
+            hideX,
+            LayoutParams(dp(ChatRules.HIDE_X_DP), dp(ChatRules.HIDE_X_DP), Gravity.TOP or Gravity.LEFT).apply {
+                leftMargin = dp(ChatRules.hideXOrigin(padDp))
+                topMargin = dp(ChatRules.hideXOrigin(padDp))
+            },
+        )
     }
 
     override fun getAccessibilityClassName(): CharSequence = Button::class.java.name
 
     fun update(unread: Int, online: Boolean) {
+        this.online = online
         val text = ChatRules.badgeText(unread)
         if (text != null) {
             pill.text = text
             pill.visibility = VISIBLE
-            dot.visibility = GONE
             contentDescription = words.unread(unread)
         } else {
             pill.visibility = GONE
-            dot.visibility = if (online) VISIBLE else GONE
             contentDescription = words.chat
         }
+        showDot()
+    }
+
+    /** The green dot: while someone is online and no red number shows, and never in hide mode, where the red X takes its corner. */
+    private fun showDot() {
+        dot.visibility = if (online && pill.visibility != VISIBLE && !inHideMode) VISIBLE else GONE
     }
 
     override fun onAttachedToWindow() {
@@ -1291,8 +1431,32 @@ internal class ChatBubbleView(
     }
 
     override fun onDetachedFromWindow() {
+        removeCallbacks(hold)
+        endHideMode()
         stopWiggle()
         super.onDetachedFromWindow()
+    }
+
+    /** A dialog, the notification shade or another app took the screen: hide mode ends (4.19.0). */
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        super.onWindowFocusChanged(hasWindowFocus)
+        if (!hasWindowFocus) endHideMode()
+    }
+
+    // ── TalkBack: "Hide chat bubble" on the bubble itself (4.19.0) ─────────
+
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info.addAction(AccessibilityNodeInfo.AccessibilityAction(R.id.affiliateo_chat_hide_action, words.hide))
+    }
+
+    /** The action hides the bubble at once: no hold, no hide mode. */
+    override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean {
+        if (action == R.id.affiliateo_chat_hide_action) {
+            hideNow()
+            return true
+        }
+        return super.performAccessibilityAction(action, arguments)
     }
 
     /**
@@ -1300,11 +1464,11 @@ internal class ChatBubbleView(
      * the bubble a touch bigger in the middle, then level and its own size
      * again. Its turn and size are read from ChatRules on every frame (one
      * animator from 0 to 1, at an even pace), so it never jumps. LiveChat
-     * decides when; a finger on the bubble, or the bubble leaving the screen,
-     * cuts it cleanly.
+     * decides when; a finger on the bubble, hide mode (4.19.0), or the bubble
+     * leaving the screen, cuts it cleanly. Never in hide mode.
      */
     fun wiggle() {
-        if (isTouched || wiggling?.isRunning == true) return
+        if (isTouched || inHideMode || wiggling?.isRunning == true) return
         wiggling = ValueAnimator.ofFloat(0f, 1f).apply {
             duration = ChatRules.WIGGLE_MS
             interpolator = LinearInterpolator()
@@ -1328,6 +1492,102 @@ internal class ChatBubbleView(
         wiggling?.cancel()
         wiggling = null
         pose(0f)
+    }
+
+    // ── Hide mode (4.19.0) ─────────────────────────────────────────────────
+
+    /** The finger stayed still for ChatRules.HOLD_MS: one haptic tick, and hide mode starts while it is still down. */
+    private fun holdDone() {
+        if (!isTouched || dragging || touchUsed || inHideMode || !isAttachedToWindow) return
+        // The rest of this touch is ignored: lifting it opens nothing, moving it drags nothing.
+        touchUsed = true
+        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        enterHideMode()
+    }
+
+    /**
+     * Hide mode, like the Affiliateo app's revenue cards in edit mode: the
+     * whole bubble rocks ChatRules.JIGGLE_DEGREES each way, a swing every
+     * ChatRules.JIGGLE_SWING_MS (not while the phone has animations off; the
+     * X still shows), and the red X takes the green dot's corner. A tap on
+     * the X hides the bubble. A touch anywhere else, on the bubble or on the
+     * screen, or ChatRules.HIDE_MODE_MS without one, ends it, and so does the
+     * bubble leaving the screen.
+     */
+    private fun enterHideMode() {
+        if (inHideMode) return
+        inHideMode = true
+        // A wiggle on its way is cut: the jiggle takes over.
+        stopWiggle()
+        hideX.visibility = VISIBLE
+        showDot()
+        if (LiveChat.animationsOn(context)) startJiggle()
+        watchWindow()
+        removeCallbacks(hideModeOver)
+        postDelayed(hideModeOver, ChatRules.HIDE_MODE_MS)
+    }
+
+    /** Hide mode ends without hiding: level again, the X gone, the green dot back while someone is online, the window as it was. */
+    fun endHideMode() {
+        removeCallbacks(hideModeOver)
+        downOnX = false
+        if (!inHideMode) return
+        inHideMode = false
+        jiggle?.cancel()
+        jiggle = null
+        rotation = 0f
+        hideX.visibility = GONE
+        showDot()
+        unwatchWindow()
+    }
+
+    private fun startJiggle() {
+        jiggle = ObjectAnimator.ofFloat(this, View.ROTATION, -ChatRules.JIGGLE_DEGREES, ChatRules.JIGGLE_DEGREES).apply {
+            duration = ChatRules.JIGGLE_SWING_MS
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            interpolator = AccelerateDecelerateInterpolator()
+            start()
+            // From halfway through the first swing, where it is level, so it starts without a jump.
+            currentPlayTime = ChatRules.JIGGLE_SWING_MS / 2
+        }
+    }
+
+    /** The red X was tapped, or TalkBack's action used: the bubble goes for good on this phone (LiveChat takes it off the screen). */
+    private fun hideNow() {
+        if (hidden) return
+        hidden = true
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        onHide()
+    }
+
+    /** Puts the watch on the screen's window: a touch the bubble does not get ends hide mode, and still reaches the app. */
+    private fun watchWindow() {
+        if (watch != null) return
+        val window = hostActivity()?.window ?: return
+        val current = window.callback ?: return
+        val next = HideModeWatch(current, this)
+        window.callback = next
+        watch = next
+    }
+
+    /** Takes the watch off again, only when nothing wrapped the window's callback since; otherwise it stays in that chain, passing everything on. */
+    private fun unwatchWindow() {
+        val gone = watch ?: return
+        watch = null
+        gone.bubble = null
+        val window = hostActivity()?.window ?: return
+        if (window.callback === gone) window.callback = gone.original
+    }
+
+    /** The screen the bubble is on (its context, or the one it wraps). */
+    private fun hostActivity(): Activity? {
+        var c: Context? = context
+        while (c is ContextWrapper) {
+            if (c is Activity) return c
+            c = c.baseContext
+        }
+        return null
     }
 
     fun requestPlace() = post { place() }
@@ -1417,22 +1677,53 @@ internal class ChatBubbleView(
         layoutParams = params
     }
 
+    /** Every touch is the bubble's own (the red X's included, hit-tested in onTouchEvent): the views inside it take none. */
+    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean = true
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) gotDown = true
+        return super.dispatchTouchEvent(event)
+    }
+
+    /** Whether a touch at the view's own (turned) x, y in px lands on the red X's target. */
+    private fun onX(event: MotionEvent) = ChatRules.onHideX(event.x / density, event.y / density, padDp)
+
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 isTouched = true
-                stopWiggle()
                 downX = event.rawX
                 downY = event.rawY
                 startOffset = dragged ?: currentOffset()
                 dragging = false
+                downOnX = false
+                if (inHideMode) {
+                    // The X hides the bubble as the finger lifts (the time limit waits
+                    // meanwhile); anywhere else on the bubble ends hide mode, and that
+                    // touch opens nothing.
+                    touchUsed = true
+                    if (onX(event)) {
+                        downOnX = true
+                        removeCallbacks(hideModeOver)
+                    } else {
+                        endHideMode()
+                    }
+                    return true
+                }
+                touchUsed = false
+                stopWiggle()
+                removeCallbacks(hold)
+                postDelayed(hold, ChatRules.HOLD_MS)
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
+                if (touchUsed) return true
                 val dx = event.rawX - downX
                 val dy = event.rawY - downY
-                if (!dragging && Math.abs(dx) + Math.abs(dy) < slop) return true
+                if (!dragging && ChatRules.isStill(dx, dy, slop)) return true
+                // Past the slop: a drag, never a hold.
+                removeCallbacks(hold)
                 dragging = true
                 val next = clamp(Pair(startOffset.first - dx / density, startOffset.second - dy / density))
                 dragged = next
@@ -1441,25 +1732,95 @@ internal class ChatBubbleView(
             }
             MotionEvent.ACTION_UP -> {
                 isTouched = false
-                if (dragging) {
-                    dragged?.let { LiveChat.saveOffset(context, appId, it.first, it.second) }
-                } else {
-                    performClick()
+                removeCallbacks(hold)
+                if (downOnX) {
+                    downOnX = false
+                    if (inHideMode && onX(event)) hideNow() else endHideMode()
+                    return true
+                }
+                when (ChatRules.release(touchUsed, dragging)) {
+                    ChatRules.Release.KEEP_PLACE -> dragged?.let { LiveChat.saveOffset(context, appId, it.first, it.second) }
+                    ChatRules.Release.OPEN_CHAT -> performClick()
+                    ChatRules.Release.NOTHING -> {}
                 }
                 return true
             }
             MotionEvent.ACTION_CANCEL -> {
                 isTouched = false
+                removeCallbacks(hold)
+                if (downOnX) endHideMode()
                 return true
             }
         }
         return super.onTouchEvent(event)
     }
 
+    /** A tap (or TalkBack's double tap) opens the chat; in hide mode it only ends hide mode. */
     override fun performClick(): Boolean {
         super.performClick()
-        onTap()
+        if (inHideMode) endHideMode() else onTap()
         return true
+    }
+}
+
+/**
+ * Watches the bubble's screen while hide mode lasts (4.19.0): a finger going
+ * down anywhere the bubble did not get it ends hide mode. Every event goes on
+ * to the screen's own callback first, untouched, so the app gets that touch
+ * as usual. On the window only while hide mode lasts; when something else
+ * wrapped the window's callback since, it stays in that chain with [bubble]
+ * cleared, only passing everything on.
+ */
+private class HideModeWatch(val original: Window.Callback, var bubble: ChatBubbleView?) : Window.Callback by original {
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        val watching = bubble
+        if (watching == null || event.actionMasked != MotionEvent.ACTION_DOWN) return original.dispatchTouchEvent(event)
+        watching.gotDown = false
+        try {
+            return original.dispatchTouchEvent(event)
+        } finally {
+            if (!watching.gotDown) watching.endHideMode()
+        }
+    }
+}
+
+/**
+ * Hide mode's red X (4.19.0): a rounded square in the red number's red, with
+ * its white edge, and a white cross. TalkBack reads it as a button named with
+ * the hide words and can press it; a finger's touches go to the bubble, which
+ * gives the X a bigger target than the square.
+ */
+@SuppressLint("ViewConstructor")
+internal class HideXView(context: Context, borderPx: Int, label: String, private val onPress: () -> Unit) : View(context) {
+    private val density = context.resources.displayMetrics.density
+    private val cross = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = ChatRules.HIDE_X_STROKE_DP * density
+        strokeCap = android.graphics.Paint.Cap.ROUND
+    }
+
+    init {
+        background = GradientDrawable().apply {
+            setColor(Color.parseColor("#EF4444"))
+            cornerRadius = ChatRules.HIDE_X_RADIUS_DP * density
+            setStroke(borderPx, Color.WHITE)
+        }
+        contentDescription = label
+        isClickable = true
+        setOnClickListener { onPress() }
+        visibility = GONE
+    }
+
+    override fun getAccessibilityClassName(): CharSequence = Button::class.java.name
+
+    override fun onDraw(canvas: android.graphics.Canvas) {
+        super.onDraw(canvas)
+        val middle = width / 2f
+        // Two strokes HIDE_X_CROSS_DP long, corner to corner through the middle.
+        val reach = ChatRules.HIDE_X_CROSS_DP * density / 2f / Math.sqrt(2.0).toFloat()
+        canvas.drawLine(middle - reach, middle - reach, middle + reach, middle + reach, cross)
+        canvas.drawLine(middle - reach, middle + reach, middle + reach, middle - reach, cross)
     }
 }
 

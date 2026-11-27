@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- TalkBack's "Hide chat bubble" action on the Live Chat bubble (4.19.0, ChatBubbleView in
+         Chat.kt). Android asks for a resource id for an action of a view's own. -->
+    <item name="affiliateo_chat_hide_action" type="id" />
+</resources>
